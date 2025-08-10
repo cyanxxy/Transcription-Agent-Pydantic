@@ -147,8 +147,8 @@ Dependencies (Pydantic Models)
 
 ```bash
 # Clone repository
-git clone https://github.com/[yourusername]/ExactTranscriber.git
-cd ExactTranscriber
+git clone https://github.com/cyanxxy/Transcription-Agent-Pydantic.git
+cd Transcription-Agent-Pydantic
 
 # Create virtual environment
 python3 -m venv venv
@@ -216,8 +216,21 @@ export GOOGLE_API_KEY="your-gemini-api-key"
 ## Requirements
 
 - Python 3.11+
-- FFmpeg for audio processing
-- Google Gemini API key
+- FFmpeg for audio processing (automatically installed on most systems)
+- Google Gemini API key (get one free at https://aistudio.google.com/app/apikey)
+
+## Getting Started
+
+1. Get your free Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+2. Follow the installation steps above
+3. Run `streamlit run main.py`
+4. Upload an audio file and start transcribing!
+
+## Supported Audio Formats
+
+- MP3, WAV, M4A, FLAC, OGG, WMA, AAC
+- Maximum file size: 200MB
+- Automatic chunking for files longer than 2 minutes
 
 ## License
 
