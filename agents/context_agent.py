@@ -4,9 +4,8 @@ Manages user-provided context to improve transcription accuracy
 """
 
 from pydantic_ai import Agent, RunContext
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 import logging
-from datetime import datetime
 
 from models import TranscriptContext
 from dependencies import ContextDeps
@@ -43,7 +42,9 @@ def process_context(
     if user_context.speaker_names:
         speakers_str = ", ".join(user_context.speaker_names)
         prompt_parts.append(f"KNOWN SPEAKERS: {speakers_str}")
-        prompt_parts.append(f"Use these exact names instead of generic 'Speaker 1', 'Speaker 2' labels when you can identify the voices.")
+        prompt_parts.append("IMPORTANT: You MUST use these exact speaker names in your transcription.")
+        prompt_parts.append("Replace any 'Speaker 1', 'Speaker 2' etc. with the actual names provided above.")
+        prompt_parts.append("If you can distinguish between voices, map them to these names based on context and voice characteristics.")
     
     # Add topic context
     if user_context.topic:
@@ -165,6 +166,7 @@ def create_context_prompt(
     
     # Process context
     ctx = RunContext(deps=deps, agent=context_agent)
-    prompt = process_context.fn(ctx, context)
+    # Build prompt directly without agent call
+    prompt = process_context(ctx, context)
     
     return prompt

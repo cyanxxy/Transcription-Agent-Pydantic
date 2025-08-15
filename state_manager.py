@@ -6,7 +6,6 @@ Using Pydantic models for validation
 import streamlit as st
 from typing import Optional, Any, Dict
 import logging
-from datetime import datetime
 
 from models import AppState, ProcessingStatus, TranscriptResult, ErrorDetail
 

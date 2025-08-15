@@ -4,11 +4,10 @@ Centralized configuration and dependencies
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 import os
 import tempfile
 from pathlib import Path
-import google.generativeai as genai
 from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
 import logging
 import streamlit as st
@@ -51,8 +50,8 @@ class TranscriptionDeps:
     remove_fillers: bool = False
     fix_capitalization: bool = True
     
-    # Cache settings
-    use_cache: bool = True
+    # Cache settings (removed - no caching)
+    use_cache: bool = False
     cache_dir: Optional[str] = None
     
     def __post_init__(self):
@@ -60,14 +59,8 @@ class TranscriptionDeps:
         # Create temp directory if it doesn't exist
         Path(self.temp_dir).mkdir(parents=True, exist_ok=True)
         
-        # Configure Google API
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
-        
-        # Set up cache directory
-        if self.use_cache and not self.cache_dir:
-            self.cache_dir = os.path.join(self.temp_dir, "cache")
-            Path(self.cache_dir).mkdir(exist_ok=True)
+        # API key will be used when creating GoogleModel instances
+        pass
     
     def get_google_model(self) -> GoogleModel:
         """Get configured Google model for Pydantic AI with Gemini 2.5 settings"""

@@ -11,7 +11,7 @@ import logging
 from datetime import datetime
 
 from models import (
-    TranscriptSegment, TranscriptResult, EditOperation
+    TranscriptSegment, EditOperation
 )
 from dependencies import EditingDeps
 

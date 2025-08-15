@@ -2,8 +2,7 @@
 Utility functions for ExactTranscriber v2.0
 """
 
-from typing import Tuple, Optional
-import math
+from typing import Tuple
 
 
 def estimate_audio_tokens(duration_seconds: float) -> int:
@@ -47,7 +46,7 @@ def estimate_transcription_cost(
     
     # Format cost string
     if total_cost < 0.01:
-        cost_str = f"<$0.01"
+        cost_str = "<$0.01"
     else:
         cost_str = f"${total_cost:.2f}"
     

@@ -5,34 +5,43 @@ Handles audio processing and transcription with Google Gemini
 
 from pydantic_ai import Agent, RunContext
 from typing import List, Optional, Dict, Any
-import tempfile
 import asyncio
 import logging
 from pathlib import Path
-import hashlib
-import json
 import os
+import re
+import uuid
 
 from pydub import AudioSegment
 import aiofiles
-import google.generativeai as genai
 
 from models import (
-    TranscriptResult, TranscriptSegment, AudioMetadata, 
-    TranscriptQuality, AudioFormat
+    TranscriptSegment, AudioMetadata, 
+    AudioFormat
 )
 from dependencies import TranscriptionDeps
 
 logger = logging.getLogger(__name__)
 
 
-# Create main transcription agent
-# Use the model name directly without prefix as per Pydantic AI docs
-transcription_agent = Agent(
-    'gemini-2.5-flash',
-    deps_type=TranscriptionDeps,
-    output_type=TranscriptResult,
-    system_prompt="""You are an expert audio transcription specialist using Gemini 2.5's advanced capabilities.
+# Create main transcription agent with proper Pydantic AI setup
+def create_transcription_agent(deps: TranscriptionDeps) -> Agent:
+    """Create a properly configured transcription agent"""
+    from pydantic_ai.models.google import GoogleModel
+    
+    # Use Pydantic AI's GoogleModel instead of direct genai
+    model = GoogleModel(
+        model_name=deps.model_name,
+        api_key=deps.api_key,
+        temperature=deps.temperature,
+        max_tokens=deps.max_output_tokens,
+    )
+    
+    agent = Agent(
+        model=model,
+        deps_type=TranscriptionDeps,
+        result_type=List[TranscriptSegment],
+        system_prompt="""You are an expert audio transcription specialist using Gemini's advanced capabilities.
     
     THINKING APPROACH:
     - Analyze audio quality and speaker patterns before transcribing
@@ -52,10 +61,14 @@ transcription_agent = Agent(
     - Maintain sentence flow and readability
     - Preserve technical terms, acronyms, and proper nouns accurately
     - Add [inaudible] for unclear sections rather than guessing"""
-)
+    )
+    
+    return agent
+
+# Initialize default agent for backward compatibility
+transcription_agent = None
 
 
-@transcription_agent.tool
 async def validate_audio_file(
     ctx: RunContext[TranscriptionDeps],
     file_data: bytes,
@@ -79,14 +92,18 @@ async def validate_audio_file(
                 "error": f"Unsupported file format: {ext}"
             }
         
-        # Save to temp file for processing
-        temp_path = os.path.join(ctx.deps.temp_dir, filename)
+        # Create safe temp filename with UUID to avoid collisions
+        # Sanitize original filename and add UUID
+        safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', Path(filename).stem)
+        unique_id = str(uuid.uuid4())[:8]
+        temp_filename = f"{safe_name}_{unique_id}.{ext}"
+        temp_path = os.path.join(ctx.deps.temp_dir, temp_filename)
         async with aiofiles.open(temp_path, 'wb') as f:
             await f.write(file_data)
         
-        # Load with pydub to validate
+        # Load with pydub to validate (run in thread to avoid blocking)
         try:
-            audio = AudioSegment.from_file(temp_path)
+            audio = await asyncio.to_thread(AudioSegment.from_file, temp_path)
             duration = len(audio) / 1000.0  # Convert to seconds
             
             return {
@@ -112,14 +129,14 @@ async def validate_audio_file(
         }
 
 
-@transcription_agent.tool
 async def process_audio_file(
     ctx: RunContext[TranscriptionDeps],
     file_path: str
 ) -> AudioMetadata:
     """Process and analyze audio file"""
     try:
-        audio = AudioSegment.from_file(file_path)
+        # Load audio in thread to avoid blocking
+        audio = await asyncio.to_thread(AudioSegment.from_file, file_path)
         
         # Get file info
         file_stat = os.stat(file_path)
@@ -149,30 +166,33 @@ async def process_audio_file(
         raise
 
 
-@transcription_agent.tool
 async def chunk_audio(
     ctx: RunContext[TranscriptionDeps],
     audio_path: str
 ) -> List[Dict[str, Any]]:
     """Split audio into chunks for processing"""
     try:
-        audio = AudioSegment.from_file(audio_path)
+        # Load audio in thread to avoid blocking
+        audio = await asyncio.to_thread(AudioSegment.from_file, audio_path)
         chunks = []
         
         chunk_duration = ctx.deps.chunk_duration_ms
         overlap = ctx.deps.chunk_overlap_ms
         
-        for i in range(0, len(audio), chunk_duration - overlap):
-            # Calculate chunk boundaries with overlap
-            start_ms = max(0, i - (overlap if i > 0 else 0))
+        # Fix: Use proper step size without double-applying overlap
+        step_size = chunk_duration - overlap
+        
+        for i in range(0, len(audio), step_size):
+            # Calculate chunk boundaries - overlap is already handled by step_size
+            start_ms = i
             end_ms = min(len(audio), i + chunk_duration)
             
             chunk = audio[start_ms:end_ms]
             
-            # Save chunk
+            # Save chunk (in thread to avoid blocking)
             chunk_filename = f"chunk_{len(chunks):03d}.wav"
             chunk_path = os.path.join(ctx.deps.temp_dir, chunk_filename)
-            chunk.export(chunk_path, format="wav")
+            await asyncio.to_thread(chunk.export, chunk_path, format="wav")
             
             chunks.append({
                 "path": chunk_path,
@@ -190,101 +210,64 @@ async def chunk_audio(
         raise
 
 
-@transcription_agent.tool
 async def transcribe_audio(
     ctx: RunContext[TranscriptionDeps],
     audio_path: str,
     custom_prompt: Optional[str] = None,
     chunk_info: Optional[Dict[str, Any]] = None,
-    previous_context: Optional[str] = None
+    previous_context: Optional[str] = None,
+    speaker_names: Optional[List[str]] = None
 ) -> List[TranscriptSegment]:
-    """Transcribe audio file or chunk using Gemini"""
-    try:
-        # Check cache first if enabled
-        cache_key = None
-        if ctx.deps.use_cache:
-            # Generate cache key from file content
-            with open(audio_path, 'rb') as f:
-                file_hash = hashlib.md5(f.read()).hexdigest()
-            cache_key = f"{file_hash}_{ctx.deps.model_name}"
-            cache_path = os.path.join(ctx.deps.cache_dir, f"{cache_key}.json")
-            
-            if os.path.exists(cache_path):
-                logger.info(f"Using cached transcription for {audio_path}")
-                with open(cache_path, 'r') as f:
-                    cached_data = json.load(f)
-                return [TranscriptSegment(**seg) for seg in cached_data]
-        
-        # Upload audio to Gemini
-        with open(audio_path, 'rb') as f:
-            uploaded_file = genai.upload_file(f, mime_type="audio/wav")
-        
-        # Prepare prompt with Gemini 2.5 optimizations
-        if custom_prompt:
-            prompt = custom_prompt
-        else:
-            prompt = """Using your advanced thinking capabilities, transcribe this audio with maximum accuracy.
-            
-            REQUIREMENTS:
-            1. Include precise timestamps in [HH:MM:SS] format
-            2. Identify and label speakers consistently (Speaker 1, Speaker 2, etc.)
-            3. Include all spoken content with proper punctuation
-            4. Format each line as: [HH:MM:SS] Speaker X: Dialogue text
-            5. Mark non-speech audio appropriately ([MUSIC], [SILENCE], [APPLAUSE], etc.)
-            6. Add paragraph breaks for topic changes
-            7. End with [END]
-            
-            THINK ABOUT:
-            - Audio quality and background noise
-            - Speaker characteristics and patterns
-            - Context and domain-specific terminology
-            - Proper nouns and technical terms"""
-        
-        # Add previous context for better continuity
-        if ctx.deps.preserve_context and previous_context:
-            prompt += f"\n\nPREVIOUS CONTEXT (for continuity):\n{previous_context}"
-        
-        # Add chunk context if provided
-        if chunk_info:
-            chunk_offset = chunk_info['start_ms'] / 1000.0
-            prompt += f"\n\nCHUNK INFO: This is chunk {chunk_info['index']} starting at {chunk_offset:.1f} seconds. Adjust timestamps accordingly."
-        
-        # Generate transcription with Gemini 2.5 structured output
-        generation_config = {
-            "temperature": ctx.deps.temperature,
-            "max_output_tokens": ctx.deps.max_output_tokens,
-            "response_mime_type": "text/plain"  # Ensure text output for transcription
-        }
-        
-        model = genai.GenerativeModel(
-            model_name=ctx.deps.model_name,
-            generation_config=generation_config
-        )
-        
-        # Add thinking budget for complex audio
-        response = await model.generate_content_async([uploaded_file, prompt])
-        
-        # Parse response into segments
-        segments = parse_transcript_response(response.text, chunk_info)
-        
-        # Cache result if enabled
-        if ctx.deps.use_cache and cache_key:
-            cache_data = [seg.model_dump() for seg in segments]
-            os.makedirs(ctx.deps.cache_dir, exist_ok=True)
-            with open(cache_path, 'w') as f:
-                json.dump(cache_data, f)
-        
-        # Clean up uploaded file
-        uploaded_file.delete()
-        
-        return segments
-        
-    except Exception as e:
-        logger.error(f"Transcription error: {e}")
-        raise
+    """Transcribe audio file or chunk - returns segments for agent to process"""
+    # This function now prepares the transcription request
+    # The actual LLM call will be handled by the agent.run() in workflow
+    
+    # For now, return empty segments as placeholder
+    # The real transcription happens through proper agent execution
+    return []
 
 
-@transcription_agent.tool
+def build_transcription_prompt(
+    custom_prompt: Optional[str],
+    previous_context: Optional[str],
+    chunk_info: Optional[Dict[str, Any]],
+    speaker_names: Optional[List[str]]
+) -> str:
+    """Build a comprehensive transcription prompt"""
+    
+    base_prompt = """Transcribe this audio with maximum accuracy.
+    
+    Return the transcription as a JSON array with the following structure:
+    [
+        {
+            "timestamp": "HH:MM:SS",
+            "speaker": "Speaker Name or Number",
+            "text": "The spoken text"
+        },
+        ...
+    ]"""
+    
+    parts = [base_prompt]
+    
+    if speaker_names:
+        speakers_str = ", ".join(speaker_names)
+        parts.append(f"\nKNOWN SPEAKERS: {speakers_str}")
+        parts.append("Use these exact speaker names in your transcription.")
+    
+    if previous_context:
+        parts.append(f"\nPREVIOUS CONTEXT:\n{previous_context}")
+    
+    if chunk_info:
+        chunk_number = chunk_info['index'] + 1
+        chunk_offset = chunk_info['start_ms'] / 1000.0
+        parts.append(f"\nCHUNK INFO: This is chunk {chunk_number} starting at {chunk_offset:.1f} seconds.")
+    
+    if custom_prompt:
+        parts.append(f"\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}")
+    
+    return "\n".join(parts)
+
+
 async def merge_chunks(
     ctx: RunContext[TranscriptionDeps],
     chunk_results: List[List[TranscriptSegment]]
@@ -305,8 +288,8 @@ async def merge_chunks(
         
         merged.extend(chunk_segments)
     
-    # Ensure speaker consistency across chunks
-    merged = ensure_speaker_consistency(merged)
+    # Ensure speaker consistency across chunks (preserve real names)
+    merged = ensure_speaker_consistency(merged, preserve_names=True)
     
     return merged
 
@@ -315,7 +298,7 @@ def parse_transcript_response(
     text: str, 
     chunk_info: Optional[Dict[str, Any]] = None
 ) -> List[TranscriptSegment]:
-    """Parse Gemini response into transcript segments"""
+    """Parse Gemini response into transcript segments (supports JSON and text)"""
     segments = []
     
     # Calculate time offset for chunks
@@ -323,6 +306,33 @@ def parse_transcript_response(
     if chunk_info:
         time_offset_seconds = chunk_info['start_ms'] / 1000.0
     
+    # Try parsing as JSON first
+    try:
+        import json
+        data = json.loads(text)
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and 'timestamp' in item:
+                    timestamp_str = item['timestamp']
+                    # Add brackets if not present
+                    if not timestamp_str.startswith('['):
+                        timestamp_str = f"[{timestamp_str}]"
+                    
+                    # Adjust timestamp for chunk offset
+                    if chunk_info and time_offset_seconds > 0:
+                        timestamp_str = adjust_timestamp(timestamp_str, time_offset_seconds)
+                    
+                    segments.append(TranscriptSegment(
+                        timestamp=timestamp_str,
+                        speaker=item.get('speaker', 'Speaker 1').strip(),
+                        text=item.get('text', '').strip()
+                    ))
+            return segments
+    except (json.JSONDecodeError, KeyError):
+        # Fall back to text parsing
+        pass
+    
+    # Fallback: Parse as plain text format
     for line in text.split('\n'):
         line = line.strip()
         if not line or line == '[END]':
@@ -376,26 +386,80 @@ def adjust_timestamp(timestamp: str, offset_seconds: float) -> str:
     return timestamp
 
 
-def ensure_speaker_consistency(segments: List[TranscriptSegment]) -> List[TranscriptSegment]:
-    """Ensure speaker labels are consistent throughout transcript"""
+def map_speakers_to_context(segments: List[TranscriptSegment], speaker_names: Optional[List[str]] = None) -> List[TranscriptSegment]:
+    """Map generic speaker labels to actual names from context
+    
+    Args:
+        segments: List of transcript segments
+        speaker_names: List of actual speaker names from user context
+    """
+    if not segments or not speaker_names:
+        return segments
+    
+    # Build a mapping from generic labels to provided names
+    generic_pattern = re.compile(r'^Speaker\s*(\d+)$', re.IGNORECASE)
+    
+    mapped_segments = []
+    for segment in segments:
+        speaker = segment.speaker.strip()
+        
+        # Check if this is a generic label
+        match = generic_pattern.match(speaker)
+        if match:
+            speaker_num = int(match.group(1))
+            # Map to provided name if available (1-indexed)
+            if speaker_num <= len(speaker_names):
+                mapped_speaker = speaker_names[speaker_num - 1]
+            else:
+                mapped_speaker = speaker  # Keep generic if no name provided
+        else:
+            # Not a generic label, keep as is (might already be a real name)
+            mapped_speaker = speaker
+        
+        mapped_segments.append(TranscriptSegment(
+            timestamp=segment.timestamp,
+            speaker=mapped_speaker,
+            text=segment.text,
+            confidence=segment.confidence
+        ))
+    
+    return mapped_segments
+
+
+def ensure_speaker_consistency(segments: List[TranscriptSegment], preserve_names: bool = True) -> List[TranscriptSegment]:
+    """Ensure speaker labels are consistent throughout transcript
+    
+    Args:
+        segments: List of transcript segments
+        preserve_names: If True, keep actual names; if False, normalize to Speaker X
+    """
     if not segments:
         return segments
     
     # Map inconsistent speaker labels
     speaker_map = {}
     normalized_segments = []
+    speaker_counter = 1
     
     for segment in segments:
         speaker = segment.speaker.strip()
         
-        # Normalize speaker label
-        if speaker.lower().startswith('speaker'):
-            # Already in correct format
+        # Check if this looks like a real name (not "Speaker X" format)
+        is_generic_label = speaker.lower().startswith('speaker') and any(c.isdigit() for c in speaker)
+        
+        if preserve_names and not is_generic_label:
+            # Keep the actual name, just ensure consistency
+            if speaker not in speaker_map:
+                speaker_map[speaker] = speaker
+            normalized_speaker = speaker_map[speaker]
+        elif is_generic_label:
+            # Already in Speaker X format, keep it
             normalized_speaker = speaker
         else:
-            # Map to Speaker X format
+            # Map unknown/inconsistent labels to Speaker X
             if speaker not in speaker_map:
-                speaker_map[speaker] = f"Speaker {len(speaker_map) + 1}"
+                speaker_map[speaker] = f"Speaker {speaker_counter}"
+                speaker_counter += 1
             normalized_speaker = speaker_map[speaker]
         
         # Create new segment with normalized speaker

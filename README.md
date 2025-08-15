@@ -1,6 +1,6 @@
 # ExactTranscriber
 
-Audio transcription application built with Pydantic AI agents and Google Gemini 2.5.
+Advanced audio transcription application using Pydantic AI agent orchestration and Google Gemini models.
 
 ## Architecture
 
@@ -94,13 +94,15 @@ Dependencies (Pydantic Models)
                 ▼
     Agent Tools (Decorated Functions)
         │
-        ├──► @agent.tool
-        └──► Type-safe I/O
+        ├──► @agent.tool decorators
+        ├──► Type-safe I/O models
+        └──► Agent execution framework
                 │
                 ▼
     RunContext[DepsType]
         │
-        └──► Dependency Injection
+        ├──► Dependency Injection
+        └──► GoogleModel integration
 ```
 
 ### Agent Details
@@ -109,7 +111,7 @@ Dependencies (Pydantic Models)
 - Audio file validation and metadata extraction
 - Intelligent chunking for large files (up to 200MB)
 - Context preservation between chunks
-- Direct integration with Gemini 2.5 API
+- Gemini model integration with thinking capabilities
 
 **QualityAgent**
 - Transcript quality scoring (0-100 scale)
@@ -132,16 +134,17 @@ Dependencies (Pydantic Models)
 
 **Core Technologies**
 - Pydantic AI for agent orchestration
-- Google Gemini 2.5 Flash/Pro models
+- Google Gemini Flash/Pro models
 - Pydantic V2 for type safety
-- AsyncIO for non-blocking operations
+- AsyncIO for concurrent operations
 - Streamlit for web interface
 
 **Key Design Patterns**
-- Dependency injection for configuration
-- Tool-based agent architecture
-- State management with session persistence
-- Structured error handling with retry logic
+- Agent-based architecture with Pydantic AI
+- Dependency injection for configuration management
+- Tool-based agent composition
+- Session state persistence
+- Retry logic with exponential backoff
 
 ## Installation
 
@@ -189,11 +192,12 @@ streamlit run main.py
 - Quality assessment with metrics
 - Multiple export formats (TXT, SRT, JSON)
 
-**Gemini 2.5 Integration**
-- Thinking budget optimization
-- 1M token input support
-- Structured output generation
-- Cost estimation
+**Model Features**
+- Configurable temperature and token limits
+- Structured JSON output support
+- Automatic retry on failures
+- Real-time cost estimation
+- Support for both Flash and Pro models
 
 **User Context Support**
 - Speaker identification
@@ -228,9 +232,30 @@ export GOOGLE_API_KEY="your-gemini-api-key"
 
 ## Supported Audio Formats
 
-- MP3, WAV, M4A, FLAC, OGG, WMA, AAC
+- MP3, WAV, M4A, FLAC, OGG
+- Automatic format detection and conversion
 - Maximum file size: 200MB
 - Automatic chunking for files longer than 2 minutes
+- Cross-chunk context preservation for continuity
+
+## Development
+
+### Running Tests
+```bash
+python -m pytest tests/
+```
+
+### Code Quality
+```bash
+# Linting
+ruff check .
+
+# Type checking
+mypy . --ignore-missing-imports
+```
+
+### Contributing
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 

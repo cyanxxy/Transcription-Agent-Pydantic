@@ -6,9 +6,7 @@ Powered by Pydantic AI for robust transcription workflows
 import streamlit as st
 import asyncio
 import logging
-from typing import Optional
 from pathlib import Path
-import tempfile
 import nest_asyncio
 
 # Allow nested event loops for Streamlit
@@ -280,7 +278,7 @@ def render_transcript_display():
         quality = result.quality
         
         # Overall score with color
-        score_color = "green" if quality.overall_score >= 70 else "orange" if quality.overall_score >= 40 else "red"
+        # Unused: score_color = "green" if quality.overall_score >= 70 else "orange" if quality.overall_score >= 40 else "red"
         st.markdown(
             f"""
             <div style='text-align: center; padding: 20px; 
@@ -399,7 +397,7 @@ def main():
         
         if uploaded_file:
             # Display file info
-            from utils import estimate_transcription_cost, format_duration
+            from utils import estimate_transcription_cost
             
             col1, col2, col3, col4 = st.columns(4)
             with col1:

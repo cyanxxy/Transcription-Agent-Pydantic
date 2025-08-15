@@ -4,14 +4,13 @@ Analyzes and validates transcript quality
 """
 
 from pydantic_ai import Agent, RunContext
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
 import re
 import statistics
 import logging
 
 from models import (
-    TranscriptResult, TranscriptSegment, TranscriptQuality,
-    ErrorDetail
+    TranscriptResult, TranscriptSegment, TranscriptQuality
 )
 from dependencies import QualityDeps
 
@@ -36,12 +35,12 @@ quality_agent = Agent(
 )
 
 
-@quality_agent.output_validator
+@quality_agent.tool
 async def validate_transcript_quality(
     ctx: RunContext[QualityDeps],
     result: TranscriptResult
 ) -> TranscriptResult:
-    """Validate and score transcript quality"""
+    """Validate and score transcript quality as a tool"""
     
     if not result.segments:
         raise ValueError("Transcript has no segments")
@@ -386,19 +385,59 @@ def calculate_timestamp_coverage(segments: List[TranscriptSegment]) -> float:
 
 
 def calculate_speaker_consistency(segments: List[TranscriptSegment]) -> float:
-    """Calculate speaker labeling consistency"""
+    """Calculate speaker labeling consistency
+    
+    Rewards stable speaker identification, whether using real names or generic labels.
+    The key is consistency - same speaker should have same label throughout.
+    """
     
     if not segments:
         return 0.0
     
-    # Check for consistent speaker format
-    speaker_pattern = r'^Speaker \d+$'
-    consistent_speakers = sum(
-        1 for seg in segments
-        if re.match(speaker_pattern, seg.speaker.strip())
-    )
+    # Count unique speakers and their frequency
+    speaker_counts = {}
+    for seg in segments:
+        speaker = seg.speaker.strip()
+        speaker_counts[speaker] = speaker_counts.get(speaker, 0) + 1
     
-    consistency = (consistent_speakers / len(segments)) * 100
+    # Calculate consistency based on speaker stability
+    # Good: Few unique speakers with many segments each (stable identification)
+    # Bad: Many unique speakers with few segments each (inconsistent labeling)
+    
+    total_segments = len(segments)
+    unique_speakers = len(speaker_counts)
+    
+    if unique_speakers == 0:
+        return 0.0
+    
+    # Average segments per speaker (not currently used but kept for future metrics)
+    # avg_segments_per_speaker = total_segments / unique_speakers
+    
+    # Consistency score based on how well distributed the segments are
+    # Perfect score if 2-4 speakers with balanced distribution
+    # Lower score for too many speakers or very unbalanced distribution
+    
+    if unique_speakers <= 10:  # Reasonable number of speakers
+        # Check distribution balance using standard deviation
+        import statistics
+        segment_counts = list(speaker_counts.values())
+        
+        if len(segment_counts) > 1:
+            mean_count = statistics.mean(segment_counts)
+            stdev = statistics.stdev(segment_counts)
+            # Lower stdev relative to mean = more balanced = better consistency
+            balance_score = max(0, 100 - (stdev / mean_count) * 50)
+        else:
+            balance_score = 100  # Single speaker is perfectly consistent
+        
+        # Penalize too many speakers slightly
+        speaker_penalty = max(0, (10 - unique_speakers) * 5)
+        
+        consistency = min(100, balance_score + speaker_penalty)
+    else:
+        # Too many unique speakers indicates poor consistency
+        consistency = max(0, 100 - (unique_speakers - 10) * 10)
+    
     return consistency
 
 
