@@ -9,15 +9,15 @@ Advanced audio transcription application using Pydantic AI agent orchestration a
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Streamlit UI Layer                       │
-│                         (main.py)                                │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
+│                            (main.py)                             │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    TranscriptionWorkflow                         │
-│                    (workflow.py)                                 │
+│                      TranscriptionWorkflow                       │
+│                         (workflow.py)                            │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │ Orchestrates agent communication and data flow          │   │
+│  │   Orchestrates agent communication and data flow        │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └────────┬───────────┬──────────────┬───────────┬────────────────┘
          │           │              │           │
@@ -32,53 +32,55 @@ Advanced audio transcription application using Pydantic AI agent orchestration a
 │▪ Merging     │▪ Prompts     │▪ Validation  │▪ Cleanup     │
 └──────────────┴──────────────┴──────────────┴──────────────┘
          │           │              │           │
-         └───────────┴──────────────┴───────────┘
-                             │
-                             ▼
-                    ┌────────────────┐
-                    │  Gemini 2.5    │
-                    │  Flash/Pro     │
-                    └────────────────┘
+         └───────────┼──────────────┼───────────┘
+                     │              │
+                     └──────┬───────┘
+                            │
+                            ▼
+                   ┌────────────────┐
+                   │     Gemini     │
+                   │   Flash/Pro    │
+                   └────────────────┘
 ```
 
 ### Data Flow
 
 ```
 Audio Input ──► TranscriptionAgent
-                      │
-                      ├──► Validation
-                      ├──► Chunking (if > 2min)
-                      └──► Processing
-                            │
-                            ▼
-              ContextAgent Enhancement
-                      │
-                      ├──► User Context
-                      ├──► Domain Terms
-                      └──► Speaker Names
-                            │
-                            ▼
-                   Gemini 2.5 API
-                      │
-                      ├──► Transcription
-                      └──► Thinking Budget
-                            │
-                            ▼
-                   QualityAgent
-                      │
-                      ├──► Quality Score
-                      ├──► Metrics
-                      └──► Validation
-                            │
-                            ▼
-                   EditingAgent
-                      │
-                      ├──► Auto-format
-                      ├──► Corrections
-                      └──► Final Output
-                            │
-                            ▼
-                Export (TXT/SRT/JSON)
+                       │
+                       ├──► Validation
+                       ├──► Chunking (if > 2min)
+                       └──► Processing
+                             │
+                             ▼
+               ContextAgent Enhancement
+                       │
+                       ├──► User Context
+                       ├──► Domain Terms
+                       └──► Speaker Names
+                             │
+                             ▼
+                     Gemini API
+                       │
+                       ├──► Transcription
+                       └──► Structured Output
+                             │
+                             ▼
+                    QualityAgent
+                       │
+                       ├──► Quality Score
+                       ├──► Metrics
+                       └──► Validation
+                             │
+                             ▼
+                    EditingAgent
+                       │
+                       ├──► Auto-format
+                       ├──► Corrections
+                       └──► Final Output
+                             │
+                             ▼
+                 Export (TXT/SRT/JSON)
 ```
 
 ### Agent Communication
