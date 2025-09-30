@@ -211,17 +211,15 @@ async def transcribe_audio(
     speaker_names: Optional[List[str]] = None,
 ) -> List[TranscriptSegment]:
     """Transcribe audio file or chunk using Gemini API directly"""
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
 
-    # Configure Gemini with API key
-    genai.configure(api_key=ctx.deps.api_key)
-
-    # Create model instance
-    model = genai.GenerativeModel(ctx.deps.model_name)
+    # Create Gemini client
+    client = genai.Client(api_key=ctx.deps.api_key)
 
     # Upload audio file to Gemini
     logger.info(f"Uploading audio file: {audio_path}")
-    audio_file = await asyncio.to_thread(genai.upload_file, audio_path)
+    audio_file = await asyncio.to_thread(client.files.upload, file=audio_path)
 
     # Build transcription prompt
     prompt = build_transcription_prompt(
@@ -230,7 +228,11 @@ async def transcribe_audio(
 
     # Generate transcription
     logger.info("Generating transcription with Gemini...")
-    response = await asyncio.to_thread(model.generate_content, [audio_file, prompt])
+    response = await asyncio.to_thread(
+        client.models.generate_content,
+        model=ctx.deps.model_name,
+        contents=[audio_file, prompt],
+    )
 
     # Parse response into segments
     segments = parse_transcript_response(response.text, chunk_info)

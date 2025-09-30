@@ -61,9 +61,9 @@ class TranscriptionDeps:
         # Create temp directory if it doesn't exist
         Path(self.temp_dir).mkdir(parents=True, exist_ok=True)
 
-        # Set API key in environment for Pydantic AI and Google Generative AI
+        # Set API key in environment for Pydantic AI and Google GenAI SDK
         os.environ["GOOGLE_API_KEY"] = self.api_key
-        os.environ["GEMINI_API_KEY"] = self.api_key
+        os.environ["GEMINI_API_KEY"] = self.api_key  # For backward compatibility
 
     @property
     def chunk_size_bytes(self) -> int:

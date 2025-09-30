@@ -60,7 +60,7 @@ Advanced audio transcription application powered by Pydantic AI orchestration an
 **TranscriptionAgent** (Pydantic AI Agent)
 - High-level orchestration with structured output
 - Type-safe dependency injection via `RunContext[TranscriptionDeps]`
-- Direct Gemini API integration via `google-generativeai` SDK
+- Direct Gemini API integration via `google-genai` SDK (new GA SDK)
 - Audio file upload and transcription generation
 
 **Utility Modules** (Pure Python Functions)
@@ -123,12 +123,16 @@ Audio File
 
 1. **Single Pydantic AI Agent**: Only `TranscriptionAgent` is a Pydantic AI Agent, created with `Agent(model_name, deps_type, output_type, system_prompt)`
 
-2. **Direct Gemini SDK Calls**: Audio transcription uses `google.generativeai` directly:
+2. **Direct Gemini SDK Calls**: Audio transcription uses `google.genai` SDK (GA version):
    ```python
-   genai.configure(api_key=ctx.deps.api_key)
-   model = genai.GenerativeModel(ctx.deps.model_name)
-   audio_file = await asyncio.to_thread(genai.upload_file, audio_path)
-   response = await asyncio.to_thread(model.generate_content, [audio_file, prompt])
+   from google import genai
+   client = genai.Client(api_key=ctx.deps.api_key)
+   audio_file = await asyncio.to_thread(client.files.upload, file=audio_path)
+   response = await asyncio.to_thread(
+       client.models.generate_content,
+       model=ctx.deps.model_name,
+       contents=[audio_file, prompt]
+   )
    ```
 
 3. **RunContext Pattern**: All utility functions receive `RunContext[DepsType]` for dependency injection:
@@ -327,8 +331,7 @@ python -m pytest tests/
 ### Project Dependencies
 
 **Core**:
-- `pydantic-ai[google]>=0.0.9` - Agent framework
-- `google-generativeai>=0.8.4` - Gemini SDK
+- `pydantic-ai[google]>=0.0.9` - Agent framework (includes google-genai SDK)
 - `streamlit==1.32.0` - Web UI
 - `pydantic>=2.5.0` - Data validation
 
@@ -398,7 +401,7 @@ The app shows estimated costs before processing.
 pip install --force-reinstall -r requirements.txt
 
 # Verify installations
-python -c "import pydantic_ai; import google.generativeai; print('OK')"
+python -c "import pydantic_ai; from google import genai; print('OK')"
 ```
 
 ## Contributing

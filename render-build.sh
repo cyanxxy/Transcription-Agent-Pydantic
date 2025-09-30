@@ -21,10 +21,10 @@ echo "-----> Installing Python dependencies from pyproject.toml..."
 pip install . --no-cache-dir -vvv
 echo "-----> Python dependencies installation attempt complete."
 
-echo "-----> Checking google-generativeai installation..."
-pip show google-generativeai
+echo "-----> Checking google-genai installation..."
+pip show google-genai
 
-echo "-----> Attempting to import google.generativeai in build script..."
-python -c "import google.generativeai as genai; print('SUCCESS: google.generativeai imported correctly in build script')" || echo "FAILURE: google.generativeai import failed in build script"
+echo "-----> Attempting to import google.genai in build script..."
+python -c "from google import genai; print('SUCCESS: google.genai imported correctly in build script')" || echo "FAILURE: google.genai import failed in build script"
 
 echo "-----> Build process finished."
