@@ -422,25 +422,22 @@ class TranscriptionWorkflow:
         time_str = timestamp.strip("[]")
         return time_str + ",000"
 
-    def _add_seconds_to_srt_time(self, srt_time: str, seconds: int) -> str:
-        """Add seconds to SRT timestamp"""
+    def _add_seconds_to_srt_time(self, srt_time: str, seconds: float) -> str:
+        """Add seconds (supports fractional) to SRT timestamp"""
         # Parse SRT time (HH:MM:SS,mmm format)
-        time_part = srt_time.split(",")[0]
-        parts = time_part.split(":")
-        hours = int(parts[0])
-        minutes = int(parts[1])
-        secs = int(parts[2])
+        time_part, _, millis_part = srt_time.partition(",")
+        hours, minutes, secs = map(int, time_part.split(":"))
+        existing_ms = int(millis_part or "000")
 
-        # Add seconds
-        secs += seconds
-        if secs >= 60:
-            minutes += secs // 60
-            secs = secs % 60
-        if minutes >= 60:
-            hours += minutes // 60
-            minutes = minutes % 60
+        total_ms = ((hours * 3600) + (minutes * 60) + secs) * 1000 + existing_ms
+        delta_ms = int(round(seconds * 1000))
+        total_ms = max(0, total_ms + delta_ms)
 
-        return f"{hours:02d}:{minutes:02d}:{secs:02d},000"
+        new_hours, remainder = divmod(total_ms, 3600000)
+        new_minutes, remainder = divmod(remainder, 60000)
+        new_seconds, new_milliseconds = divmod(remainder, 1000)
+
+        return f"{new_hours:02d}:{new_minutes:02d}:{new_seconds:02d},{new_milliseconds:03d}"
 
     def _srt_time_to_seconds(self, srt_time: str) -> float:
         """Convert SRT timestamp to seconds for comparison"""

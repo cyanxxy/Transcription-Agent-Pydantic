@@ -90,6 +90,7 @@ class EditingDeps:
     enable_auto_correct: bool = True
     preserve_timestamps: bool = True
     max_undo_history: int = 50
+    remove_fillers: bool = False
 
     # Formatting rules
     sentence_case: bool = True
@@ -209,7 +210,8 @@ class AppDeps:
     def from_config(cls, api_key: str, **kwargs) -> "AppDeps":
         """Create dependencies from configuration"""
         transcription = TranscriptionDeps(api_key=api_key, **kwargs)
-        return cls(transcription=transcription)
+        editing = EditingDeps(remove_fillers=transcription.remove_fillers)
+        return cls(transcription=transcription, editing=editing)
 
     @classmethod
     def from_streamlit(cls) -> Optional["AppDeps"]:
