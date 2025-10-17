@@ -27,7 +27,7 @@ Advanced audio transcription application powered by Pydantic AI orchestration an
 ┌─────────────────────────────────────────────────────────────────┐
 │                    TranscriptionWorkflow                         │
 │                        (workflow.py)                             │
-│  • Pipeline orchestration with RunContext                        │
+│  • Pipeline orchestration with dependency injection              │
 │  • Direct function calls to utilities                            │
 │  • State management and error handling                           │
 └─────┬───────────┬──────────────┬────────────┬───────────────────┘
@@ -59,7 +59,7 @@ Advanced audio transcription application powered by Pydantic AI orchestration an
 
 **TranscriptionAgent** (Pydantic AI Agent)
 - High-level orchestration with structured output
-- Type-safe dependency injection via `RunContext[TranscriptionDeps]`
+- Type-safe dependency injection via `deps` parameter
 - Direct Gemini API integration via `google-genai` SDK (new GA SDK)
 - Audio file upload and transcription generation
 
@@ -70,7 +70,7 @@ Advanced audio transcription application powered by Pydantic AI orchestration an
 
 **Dependency Injection**
 - `TranscriptionDeps`, `QualityDeps`, `EditingDeps`, `ContextDeps`
-- Passed via `RunContext` for type safety
+- Passed directly to utility functions for type safety
 - Centralized configuration management
 
 ### Data Flow
@@ -78,10 +78,10 @@ Advanced audio transcription application powered by Pydantic AI orchestration an
 ```
 Audio File
    │
-   ├──► validate_audio_file(ctx, file_data, filename)
+   ├──► validate_audio_file(deps, file_data, filename)
    │    └──► Returns: validation result + temp path
    │
-   ├──► process_audio_file(ctx, temp_path)
+   ├──► process_audio_file(deps, temp_path)
    │    └──► Returns: AudioMetadata (duration, format, chunking needs)
    │
    ├──► [If user context provided]
@@ -90,18 +90,18 @@ Audio File
    │
    ├──► [If needs_chunking]
    │    │
-   │    ├──► chunk_audio(ctx, audio_path)
+   │    ├──► chunk_audio(deps, audio_path)
    │    │    └──► Returns: List of chunk files with timing info
    │    │
    │    ├──► For each chunk:
-   │    │    run_transcription_agent(agent, ctx, chunk_path, prompt, chunk_info, previous_context, speakers)
+   │    │    run_transcription_agent(agent, deps, chunk_path, prompt, chunk_info, previous_context, speakers)
    │    │    └──► Agent.run([... BinaryContent(audio) ...]) → Gemini response → Typed segments
    │    │
-   │    └──► merge_chunks(ctx, all_segments)
+   │    └──► merge_chunks(deps, all_segments)
    │         └──► Returns: Merged TranscriptSegments with dedupe
    │
    ├──► [If no chunking]
-   │    run_transcription_agent(agent, ctx, audio_path, prompt, None, None, speakers)
+   │    run_transcription_agent(agent, deps, audio_path, prompt, None, None, speakers)
    │    └──► Agent.run([... BinaryContent(audio) ...]) → Gemini response → Typed segments
    │
    ├──► [If speaker_names provided]
@@ -134,13 +134,16 @@ Audio File
    segments = result.output  # -> List[TranscriptSegment]
    ```
 
-3. **RunContext Pattern**: All utility functions receive `RunContext[DepsType]` for dependency injection:
+3. **Direct Dependency Injection**: All utility functions receive `deps` directly for type-safe dependency injection:
    ```python
    async def validate_audio_file(
-       ctx: RunContext[TranscriptionDeps],
+       deps: TranscriptionDeps,
        file_data: bytes,
        filename: str
    ) -> Dict[str, Any]:
+       # Access dependencies directly
+       if size_mb > deps.max_file_size_mb:
+           ...
    ```
 
 4. **No Tool Decorators**: No `@agent.tool` or similar - utilities are called directly by workflow
