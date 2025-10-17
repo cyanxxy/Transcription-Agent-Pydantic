@@ -74,16 +74,16 @@ transcription_agent = None
 
 
 async def validate_audio_file(
-    ctx: RunContext[TranscriptionDeps], file_data: bytes, filename: str
+    deps: TranscriptionDeps, file_data: bytes, filename: str
 ) -> Dict[str, Any]:
     """Validate audio file before processing"""
     try:
         # Check file size
         size_mb = len(file_data) / (1024 * 1024)
-        if size_mb > ctx.deps.max_file_size_mb:
+        if size_mb > deps.max_file_size_mb:
             return {
                 "valid": False,
-                "error": f"File size ({size_mb:.1f}MB) exceeds limit ({ctx.deps.max_file_size_mb}MB)",
+                "error": f"File size ({size_mb:.1f}MB) exceeds limit ({deps.max_file_size_mb}MB)",
             }
 
         # Get file extension
@@ -96,7 +96,7 @@ async def validate_audio_file(
         safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", Path(filename).stem)
         unique_id = str(uuid.uuid4())[:8]
         temp_filename = f"{safe_name}_{unique_id}.{ext}"
-        temp_path = os.path.join(ctx.deps.temp_dir, temp_filename)
+        temp_path = os.path.join(deps.temp_dir, temp_filename)
         async with aiofiles.open(temp_path, "wb") as f:
             await f.write(file_data)
 
@@ -123,7 +123,7 @@ async def validate_audio_file(
 
 
 async def process_audio_file(
-    ctx: RunContext[TranscriptionDeps], file_path: str
+    deps: TranscriptionDeps, file_path: str
 ) -> AudioMetadata:
     """Process and analyze audio file"""
     try:
@@ -137,13 +137,13 @@ async def process_audio_file(
 
         # Determine if chunking is needed
         duration_ms = len(audio)
-        needs_chunking = duration_ms > ctx.deps.chunk_duration_ms
+        needs_chunking = duration_ms > deps.chunk_duration_ms
 
         chunk_count = None
         if needs_chunking:
             chunk_count = (
-                duration_ms + ctx.deps.chunk_duration_ms - 1
-            ) // ctx.deps.chunk_duration_ms
+                duration_ms + deps.chunk_duration_ms - 1
+            ) // deps.chunk_duration_ms
 
         return AudioMetadata(
             filename=filename,
@@ -161,7 +161,7 @@ async def process_audio_file(
 
 
 async def chunk_audio(
-    ctx: RunContext[TranscriptionDeps], audio_path: str
+    deps: TranscriptionDeps, audio_path: str
 ) -> List[Dict[str, Any]]:
     """Split audio into chunks for processing"""
     try:
@@ -169,8 +169,8 @@ async def chunk_audio(
         audio = await asyncio.to_thread(AudioSegment.from_file, audio_path)
         chunks = []
 
-        chunk_duration = ctx.deps.chunk_duration_ms
-        overlap = ctx.deps.chunk_overlap_ms
+        chunk_duration = deps.chunk_duration_ms
+        overlap = deps.chunk_overlap_ms
 
         # Fix: Use proper step size without double-applying overlap
         step_size = chunk_duration - overlap
@@ -184,7 +184,7 @@ async def chunk_audio(
 
             # Save chunk (in thread to avoid blocking)
             chunk_filename = f"chunk_{len(chunks):03d}.wav"
-            chunk_path = os.path.join(ctx.deps.temp_dir, chunk_filename)
+            chunk_path = os.path.join(deps.temp_dir, chunk_filename)
             await asyncio.to_thread(chunk.export, chunk_path, format="wav")
 
             chunks.append(
@@ -207,7 +207,7 @@ async def chunk_audio(
 
 async def run_transcription_agent(
     agent: Agent,
-    ctx: RunContext[TranscriptionDeps],
+    deps: TranscriptionDeps,
     audio_path: str,
     custom_prompt: Optional[str] = None,
     chunk_info: Optional[Dict[str, Any]] = None,
@@ -224,12 +224,12 @@ async def run_transcription_agent(
         custom_prompt, previous_context, chunk_info, speaker_names
     )
 
-    model_settings = _build_google_settings(ctx.deps)
+    model_settings = _build_google_settings(deps)
 
     logger.info(f"Running transcription agent for {audio_path}")
     result = await agent.run(
         [prompt, BinaryContent(data=audio_bytes, media_type=media_type)],
-        deps=ctx.deps,
+        deps=deps,
         model_settings=model_settings,
     )
 
@@ -323,7 +323,7 @@ Focus on accuracy, preserve technical terms, and avoid speculative guesses (use 
 
 
 async def merge_chunks(
-    ctx: RunContext[TranscriptionDeps], chunk_results: List[List[TranscriptSegment]]
+    deps: TranscriptionDeps, chunk_results: List[List[TranscriptSegment]]
 ) -> List[TranscriptSegment]:
     """Merge transcription chunks into a single transcript"""
     merged = []

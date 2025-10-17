@@ -86,6 +86,9 @@ async def handle_transcription(workflow: TranscriptionWorkflow, file):
 
             st.success("✅ Transcription complete!")
 
+            # Force a rerun to show the transcript tabs
+            st.rerun()
+
     except Exception as e:
         logger.error(f"Transcription failed: {e}", exc_info=True)
         StateManager.set_error(str(e))

@@ -8,8 +8,6 @@ import logging
 from datetime import datetime
 import os
 
-from pydantic_ai import RunContext
-
 from models import (
     TranscriptResult,
     TranscriptSegment,
@@ -62,15 +60,12 @@ class TranscriptionWorkflow:
         self.current_file = filename
         self.processing_start = datetime.now()
 
-        # Create a RunContext for calling helper functions
-        ctx = RunContext(deps=self.deps.transcription, retry=0)
-
         try:
             # Step 1: Validate file
             if progress_callback:
                 progress_callback("Validating audio file...", 0.1)
 
-            validation = await validate_audio_file(ctx, file_data, filename)
+            validation = await validate_audio_file(self.deps.transcription, file_data, filename)
 
             if not validation.get("valid"):
                 raise ValueError(validation.get("error", "Invalid audio file"))
@@ -80,7 +75,7 @@ class TranscriptionWorkflow:
                 progress_callback("Processing audio...", 0.2)
 
             temp_path = validation.get("temp_path")
-            metadata = await process_audio_file(ctx, temp_path)
+            metadata = await process_audio_file(self.deps.transcription, temp_path)
 
             # Step 2.5: Process user context if provided
             context_prompt = ""
@@ -108,7 +103,6 @@ class TranscriptionWorkflow:
             # Step 3: Transcribe (with chunking if needed)
             if metadata.needs_chunking:
                 segments = await self._transcribe_with_chunks(
-                    ctx,
                     temp_path,
                     metadata,
                     progress_callback,
@@ -121,7 +115,7 @@ class TranscriptionWorkflow:
 
                 segments = await run_transcription_agent(
                     self.transcription_agent,
-                    ctx,
+                    self.deps.transcription,
                     temp_path,
                     custom_prompt,
                     None,
@@ -184,7 +178,6 @@ class TranscriptionWorkflow:
 
     async def _transcribe_with_chunks(
         self,
-        ctx: RunContext,
         audio_path: str,
         metadata: AudioMetadata,
         progress_callback: Optional[Callable],
@@ -197,7 +190,7 @@ class TranscriptionWorkflow:
             progress_callback("Splitting audio into chunks...", 0.3)
 
         # Create chunks directly
-        chunks = await chunk_audio(ctx, audio_path)
+        chunks = await chunk_audio(self.deps.transcription, audio_path)
 
         # Transcribe each chunk with context from previous chunks
         all_segments = []
@@ -213,7 +206,7 @@ class TranscriptionWorkflow:
             # Direct transcription call through the agent
             chunk_segments = await run_transcription_agent(
                 self.transcription_agent,
-                ctx,
+                self.deps.transcription,
                 chunk_info["path"],
                 custom_prompt,
                 chunk_info,
@@ -236,7 +229,7 @@ class TranscriptionWorkflow:
         if progress_callback:
             progress_callback("Merging transcription chunks...", 0.7)
 
-        merged_segments = await merge_chunks(ctx, all_segments)
+        merged_segments = await merge_chunks(self.deps.transcription, all_segments)
 
         return merged_segments
 
