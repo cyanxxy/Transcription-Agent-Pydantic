@@ -27,6 +27,7 @@ from agents.transcription_agent import (
     chunk_audio,
     merge_chunks,
     map_speakers_to_context,
+    run_transcription_agent,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,11 +119,14 @@ class TranscriptionWorkflow:
                 if progress_callback:
                     progress_callback("Transcribing audio...", 0.5)
 
-                # Direct transcription call
-                from agents.transcription_agent import transcribe_audio
-
-                segments = await transcribe_audio(
-                    ctx, temp_path, custom_prompt, None, None, speaker_names
+                segments = await run_transcription_agent(
+                    self.transcription_agent,
+                    ctx,
+                    temp_path,
+                    custom_prompt,
+                    None,
+                    None,
+                    speaker_names,
                 )
 
             # Step 3.5: Map speakers to context names if provided
@@ -199,8 +203,6 @@ class TranscriptionWorkflow:
         all_segments = []
         previous_context = None
 
-        from agents.transcription_agent import transcribe_audio
-
         for i, chunk_info in enumerate(chunks):
             if progress_callback:
                 progress = 0.3 + (0.4 * (i / len(chunks)))
@@ -208,8 +210,9 @@ class TranscriptionWorkflow:
                     f"Transcribing chunk {i+1}/{len(chunks)}...", progress
                 )
 
-            # Direct transcription call
-            chunk_segments = await transcribe_audio(
+            # Direct transcription call through the agent
+            chunk_segments = await run_transcription_agent(
+                self.transcription_agent,
                 ctx,
                 chunk_info["path"],
                 custom_prompt,

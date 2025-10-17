@@ -3,7 +3,8 @@ Transcription Agent using Pydantic AI
 Handles audio processing and transcription with Google Gemini
 """
 
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, RunContext, BinaryContent
+from pydantic_ai.models.google import GoogleModelSettings
 from typing import List, Optional, Dict, Any
 import asyncio
 import logging
@@ -11,6 +12,7 @@ from pathlib import Path
 import os
 import re
 import uuid
+import mimetypes
 
 from pydub import AudioSegment
 import aiofiles
@@ -42,25 +44,26 @@ def create_transcription_agent(deps: TranscriptionDeps) -> Agent:
         deps_type=TranscriptionDeps,
         output_type=List[TranscriptSegment],
         system_prompt="""You are an expert audio transcription specialist using Gemini's advanced capabilities.
-    
+
+    OBJECTIVE:
+    - Produce highly accurate transcripts for any supplied audio.
+    - Return only data that validates against the TranscriptSegment schema:
+      * timestamp: string in the form [HH:MM:SS]
+      * speaker: consistent label or provided speaker name
+      * text: cleaned utterance with natural punctuation
+      * confidence: optional float between 0 and 1 when you can estimate certainty
+
     THINKING APPROACH:
     - Analyze audio quality and speaker patterns before transcribing
     - Use context clues to disambiguate unclear speech
     - Consider domain-specific terminology and proper nouns
-    
-    FORMAT REQUIREMENTS:
-    - Use format: [HH:MM:SS] Speaker X: Text...
+
+    DELIVERY RULES:
     - Maintain consistent speaker labels throughout
-    - Include natural paragraph breaks for topic changes
-    - Mark non-speech audio as [MUSIC], [SILENCE], [NOISE], [APPLAUSE], etc.
-    - End transcription with [END]
-    
-    QUALITY STANDARDS:
-    - Prioritize accuracy over speed
-    - Use proper punctuation including commas, periods, question marks
-    - Maintain sentence flow and readability
-    - Preserve technical terms, acronyms, and proper nouns accurately
-    - Add [inaudible] for unclear sections rather than guessing""",
+    - Insert non-speech events as [MUSIC], [SILENCE], [NOISE], [APPLAUSE], etc.
+    - Preserve readability with sentence-level punctuation
+    - Prefer accuracy over speed; use [inaudible] rather than guessing
+    - Do not include commentary outside of the structured transcript""",
     )
 
     return agent
@@ -202,7 +205,8 @@ async def chunk_audio(
         raise
 
 
-async def transcribe_audio(
+async def run_transcription_agent(
+    agent: Agent,
     ctx: RunContext[TranscriptionDeps],
     audio_path: str,
     custom_prompt: Optional[str] = None,
@@ -210,38 +214,70 @@ async def transcribe_audio(
     previous_context: Optional[str] = None,
     speaker_names: Optional[List[str]] = None,
 ) -> List[TranscriptSegment]:
-    """Transcribe audio file or chunk using Gemini API directly"""
-    from google import genai
+    """Transcribe audio file or chunk using the configured Pydantic AI agent"""
 
-    # Create Gemini client
-    client = genai.Client(api_key=ctx.deps.api_key)
+    async with aiofiles.open(audio_path, "rb") as audio_file:
+        audio_bytes = await audio_file.read()
 
-    # Upload audio file to Gemini
-    logger.info(f"Uploading audio file: {audio_path}")
-    audio_file = await asyncio.to_thread(client.files.upload, file=audio_path)
-
-    # Build transcription prompt
+    media_type = _guess_media_type(audio_path)
     prompt = build_transcription_prompt(
         custom_prompt, previous_context, chunk_info, speaker_names
     )
 
-    # Generate transcription
-    logger.info("Generating transcription with Gemini...")
-    response = await asyncio.to_thread(
-        client.models.generate_content,
-        model=ctx.deps.model_name,
-        contents=[prompt, audio_file],
+    model_settings = _build_google_settings(ctx.deps)
+
+    logger.info(f"Running transcription agent for {audio_path}")
+    result = await agent.run(
+        [prompt, BinaryContent(data=audio_bytes, media_type=media_type)],
+        deps=ctx.deps,
+        model_settings=model_settings,
     )
 
-    # Parse response into segments
-    segments = parse_transcript_response(response.text, chunk_info)
+    segments: List[TranscriptSegment] = result.output or []
+
+    # Adjust timestamps if chunked
+    if chunk_info and chunk_info.get("start_ms"):
+        offset_seconds = chunk_info["start_ms"] / 1000.0
+        if offset_seconds > 0:
+            segments = [
+                segment.model_copy(
+                    update={
+                        "timestamp": adjust_timestamp(segment.timestamp, offset_seconds)
+                    }
+                )
+                for segment in segments
+            ]
 
     # Map speakers if names provided
     if speaker_names:
         segments = map_speakers_to_context(segments, speaker_names)
 
-    logger.info(f"Transcribed {len(segments)} segments")
+    logger.info(f"Transcribed {len(segments)} segments via agent")
     return segments
+
+
+def _guess_media_type(path: str) -> str:
+    """Infer media type from file path for Gemini uploads"""
+    media_type, _ = mimetypes.guess_type(path)
+    return media_type or "audio/wav"
+
+
+def _build_google_settings(deps: TranscriptionDeps) -> GoogleModelSettings:
+    """Build Google model settings from dependencies"""
+    settings_kwargs: Dict[str, Any] = {
+        "temperature": deps.temperature,
+        "max_tokens": deps.max_output_tokens,
+    }
+
+    thinking_config: Dict[str, Any] = {}
+    if deps.thinking_budget >= 0:
+        thinking_config["thinking_budget"] = deps.thinking_budget
+    if deps.enable_thought_summaries:
+        thinking_config["include_thoughts"] = True
+    if thinking_config:
+        settings_kwargs["google_thinking_config"] = thinking_config
+
+    return GoogleModelSettings(**settings_kwargs)
 
 
 def build_transcription_prompt(
@@ -253,16 +289,15 @@ def build_transcription_prompt(
     """Build a comprehensive transcription prompt"""
 
     base_prompt = """Transcribe this audio with maximum accuracy.
-    
-    Return the transcription as a JSON array with the following structure:
-    [
-        {
-            "timestamp": "HH:MM:SS",
-            "speaker": "Speaker Name or Number",
-            "text": "The spoken text"
-        },
-        ...
-    ]"""
+
+Return structured transcript data that conforms to the TranscriptSegment schema.
+For each segment include:
+- timestamp: string formatted as [HH:MM:SS]
+- speaker: consistent speaker label or provided name
+- text: cleaned spoken content with natural punctuation
+- confidence: optional float between 0 and 1 when you can estimate certainty
+
+Focus on accuracy, preserve technical terms, and avoid speculative guesses (use [inaudible] when unsure)."""
 
     parts = [base_prompt]
 
@@ -310,82 +345,6 @@ async def merge_chunks(
     merged = ensure_speaker_consistency(merged, preserve_names=True)
 
     return merged
-
-
-def parse_transcript_response(
-    text: str, chunk_info: Optional[Dict[str, Any]] = None
-) -> List[TranscriptSegment]:
-    """Parse Gemini response into transcript segments (supports JSON and text)"""
-    segments = []
-
-    # Calculate time offset for chunks
-    time_offset_seconds = 0
-    if chunk_info:
-        time_offset_seconds = chunk_info["start_ms"] / 1000.0
-
-    # Try parsing as JSON first
-    try:
-        import json
-
-        data = json.loads(text)
-        if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and "timestamp" in item:
-                    timestamp_str = item["timestamp"]
-                    # Add brackets if not present
-                    if not timestamp_str.startswith("["):
-                        timestamp_str = f"[{timestamp_str}]"
-
-                    # Adjust timestamp for chunk offset
-                    if chunk_info and time_offset_seconds > 0:
-                        timestamp_str = adjust_timestamp(
-                            timestamp_str, time_offset_seconds
-                        )
-
-                    segments.append(
-                        TranscriptSegment(
-                            timestamp=timestamp_str,
-                            speaker=item.get("speaker", "Speaker 1").strip(),
-                            text=item.get("text", "").strip(),
-                        )
-                    )
-            return segments
-    except (json.JSONDecodeError, KeyError):
-        # Fall back to text parsing
-        pass
-
-    # Fallback: Parse as plain text format
-    for line in text.split("\n"):
-        line = line.strip()
-        if not line or line == "[END]":
-            continue
-
-        # Parse timestamp pattern [HH:MM:SS]
-        if line.startswith("[") and "] " in line:
-            parts = line.split("] ", 1)
-            timestamp_str = parts[0] + "]"
-
-            # Parse speaker and text
-            if len(parts) > 1:
-                content = parts[1]
-                if ": " in content:
-                    speaker, text = content.split(": ", 1)
-
-                    # Adjust timestamp for chunk offset
-                    if chunk_info and time_offset_seconds > 0:
-                        timestamp_str = adjust_timestamp(
-                            timestamp_str, time_offset_seconds
-                        )
-
-                    segments.append(
-                        TranscriptSegment(
-                            timestamp=timestamp_str,
-                            speaker=speaker.strip(),
-                            text=text.strip(),
-                        )
-                    )
-
-    return segments
 
 
 def adjust_timestamp(timestamp: str, offset_seconds: float) -> str:

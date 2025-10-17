@@ -94,15 +94,15 @@ Audio File
    │    │    └──► Returns: List of chunk files with timing info
    │    │
    │    ├──► For each chunk:
-   │    │    transcribe_audio(ctx, chunk_path, prompt, chunk_info, previous_context, speakers)
-   │    │    └──► Upload to Gemini → Generate content → Parse segments
+   │    │    run_transcription_agent(agent, ctx, chunk_path, prompt, chunk_info, previous_context, speakers)
+   │    │    └──► Agent.run([... BinaryContent(audio) ...]) → Gemini response → Typed segments
    │    │
    │    └──► merge_chunks(ctx, all_segments)
    │         └──► Returns: Merged TranscriptSegments with dedupe
    │
    ├──► [If no chunking]
-   │    transcribe_audio(ctx, audio_path, prompt, None, None, speakers)
-   │    └──► Upload to Gemini → Generate content → Parse segments
+   │    run_transcription_agent(agent, ctx, audio_path, prompt, None, None, speakers)
+   │    └──► Agent.run([... BinaryContent(audio) ...]) → Gemini response → Typed segments
    │
    ├──► [If speaker_names provided]
    │    map_speakers_to_context(segments, speaker_names)
@@ -123,16 +123,15 @@ Audio File
 
 1. **Single Pydantic AI Agent**: Only `TranscriptionAgent` is a Pydantic AI Agent, created with `Agent(model_name, deps_type, output_type, system_prompt)`
 
-2. **Direct Gemini SDK Calls**: Audio transcription uses `google.genai` SDK (GA version):
+2. **Multimodal Agent Invocation**: Audio bytes are wrapped in `BinaryContent` and sent through `Agent.run`, so Pydantic AI handles the Gemini 2.5 request end-to-end:
    ```python
-   from google import genai
-   client = genai.Client(api_key=ctx.deps.api_key)
-   audio_file = await asyncio.to_thread(client.files.upload, file=audio_path)
-   response = await asyncio.to_thread(
-       client.models.generate_content,
-       model=ctx.deps.model_name,
-       contents=[audio_file, prompt]
+   prompt = build_transcription_prompt(...)
+   result = await agent.run(
+       [prompt, BinaryContent(data=audio_bytes, media_type="audio/wav")],
+       deps=ctx.deps,
+       model_settings=_build_google_settings(ctx.deps),
    )
+   segments = result.output  # -> List[TranscriptSegment]
    ```
 
 3. **RunContext Pattern**: All utility functions receive `RunContext[DepsType]` for dependency injection:
@@ -259,10 +258,11 @@ Toggle in the sidebar under Settings.
 Edit `dependencies.py` to customize:
 
 ```python
-class TranscriptionDeps(BaseModel):
+@dataclass
+class TranscriptionDeps:
     api_key: str
     model_name: str = "gemini-2.5-flash"
-    max_file_size_mb: float = 200.0
+    max_file_size_mb: int = 200
     chunk_duration_ms: int = 120000  # 2 minutes
     chunk_overlap_ms: int = 5000     # 5 seconds
     preserve_context: bool = True
