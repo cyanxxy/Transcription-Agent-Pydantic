@@ -250,8 +250,6 @@ def calculate_speaker_consistency(segments: List[TranscriptSegment]) -> float:
 
     if unique_speakers <= 10:  # Reasonable number of speakers
         # Check distribution balance using standard deviation
-        import statistics
-
         segment_counts = list(speaker_counts.values())
 
         if len(segment_counts) > 1:

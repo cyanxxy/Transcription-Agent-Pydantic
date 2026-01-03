@@ -69,7 +69,7 @@ Advanced audio transcription application powered by Pydantic AI orchestration an
 - Editing operations (formatting, find/replace, capitalization)
 
 **Dependency Injection**
-- `TranscriptionDeps`, `QualityDeps`, `EditingDeps`, `ContextDeps`
+- `TranscriptionDeps`, `QualityDeps`, `EditingDeps`, `ExportDeps`
 - Passed directly to utility functions for type safety
 - Centralized configuration management
 
@@ -334,7 +334,7 @@ python -m pytest tests/
 ### Project Dependencies
 
 **Core**:
-- `pydantic-ai[google]>=0.0.9` - Agent framework (includes google-genai SDK)
+- `pydantic-ai>=0.0.50` - Agent framework with Google Gemini support
 - `streamlit==1.32.0` - Web UI
 - `pydantic>=2.5.0` - Data validation
 

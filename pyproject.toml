@@ -9,7 +9,7 @@ description = "A Streamlit application for accurate audio transcription using Py
 requires-python = ">=3.11"
 dependencies = [
     "streamlit==1.32.0",
-    "pydantic-ai>=0.0.9",
+    "pydantic-ai>=0.0.50",
     "pydantic>=2.5.0",
     "google-genai>=1.10.0",  # Google Gen AI SDK (GA version)
     "pydub==0.25.1",

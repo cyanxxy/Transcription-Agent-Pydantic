@@ -3,7 +3,7 @@ Transcription Agent using Pydantic AI
 Handles audio processing and transcription with Google Gemini
 """
 
-from pydantic_ai import Agent, RunContext, BinaryContent
+from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models.google import GoogleModelSettings
 from typing import List, Optional, Dict, Any
 import asyncio
@@ -26,16 +26,13 @@ logger = logging.getLogger(__name__)
 # Create main transcription agent with proper Pydantic AI setup
 def create_transcription_agent(deps: TranscriptionDeps) -> Agent:
     """Create a properly configured transcription agent"""
-    import os
-
-    # Set API key in environment for Pydantic AI to use
-    os.environ["GOOGLE_API_KEY"] = deps.api_key
+    # Note: API key is already set in TranscriptionDeps.__post_init__
 
     # Use model name string - Pydantic AI handles the rest
     # Format: 'google-gla:model-name' for Google models
     model_name = (
         f"google-gla:{deps.model_name}"
-        if not deps.model_name.startswith("google-")
+        if not deps.model_name.startswith("google-gla:")
         else deps.model_name
     )
 
@@ -70,7 +67,7 @@ def create_transcription_agent(deps: TranscriptionDeps) -> Agent:
 
 
 # Initialize default agent for backward compatibility
-transcription_agent = None
+transcription_agent: Optional[Agent[TranscriptionDeps, List[TranscriptSegment]]] = None
 
 
 async def validate_audio_file(
@@ -220,6 +217,12 @@ async def run_transcription_agent(
         audio_bytes = await audio_file.read()
 
     media_type = _guess_media_type(audio_path)
+
+    # Validate content type
+    content = BinaryContent(data=audio_bytes, media_type=media_type)
+    if not content.is_audio:
+        logger.warning(f"Content may not be audio: {media_type}")
+
     prompt = build_transcription_prompt(
         custom_prompt, previous_context, chunk_info, speaker_names
     )
@@ -228,12 +231,16 @@ async def run_transcription_agent(
 
     logger.info(f"Running transcription agent for {audio_path}")
     result = await agent.run(
-        [prompt, BinaryContent(data=audio_bytes, media_type=media_type)],
+        [prompt, content],
         deps=deps,
         model_settings=model_settings,
     )
 
     segments: List[TranscriptSegment] = result.output or []
+
+    # Warn if transcription returned empty
+    if not segments:
+        logger.warning(f"Transcription returned empty result for {audio_path}")
 
     # Adjust timestamps if chunked
     if chunk_info and chunk_info.get("start_ms"):
@@ -248,9 +255,7 @@ async def run_transcription_agent(
                 for segment in segments
             ]
 
-    # Map speakers if names provided
-    if speaker_names:
-        segments = map_speakers_to_context(segments, speaker_names)
+    # Note: Speaker mapping is handled by workflow.py after all chunks are merged
 
     logger.info(f"Transcribed {len(segments)} segments via agent")
     return segments

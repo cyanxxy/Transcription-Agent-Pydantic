@@ -3,13 +3,11 @@ Editing Tools utilities
 Provides smart editing and formatting capabilities
 """
 
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Tuple
 import re
-import difflib
 import logging
-from datetime import datetime
 
-from models import TranscriptSegment, EditOperation
+from models import TranscriptSegment
 from dependencies import EditingDeps
 
 logger = logging.getLogger(__name__)
@@ -271,45 +269,6 @@ def split_long_segments(
                 split_segments.append(new_segment)
 
     return split_segments
-
-
-def get_edit_diff(original: str, edited: str) -> List[Dict[str, Any]]:
-    """Get detailed diff between original and edited text"""
-
-    # Use difflib to get detailed changes
-    differ = difflib.unified_diff(
-        original.splitlines(keepends=True),
-        edited.splitlines(keepends=True),
-        fromfile="original",
-        tofile="edited",
-        lineterm="",
-    )
-
-    changes = []
-    for line in differ:
-        if line.startswith("+") and not line.startswith("+++"):
-            changes.append({"type": "addition", "text": line[1:].strip()})
-        elif line.startswith("-") and not line.startswith("---"):
-            changes.append({"type": "deletion", "text": line[1:].strip()})
-
-    return changes
-
-
-def create_edit_operation(
-    operation_type: str,
-    target: Optional[str] = None,
-    replacement: Optional[str] = None,
-    options: Optional[Dict[str, Any]] = None,
-) -> EditOperation:
-    """Create an edit operation for history tracking"""
-
-    return EditOperation(
-        operation=operation_type,
-        target=target,
-        replacement=replacement,
-        options=options or {},
-        timestamp=datetime.now(),
-    )
 
 
 # Helper functions

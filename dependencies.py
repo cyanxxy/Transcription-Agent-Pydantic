@@ -176,23 +176,6 @@ class ExportDeps:
 
 
 @dataclass
-class ContextDeps:
-    """Dependencies for context agent"""
-
-    max_speakers: int = 10
-    max_terms: int = 50
-    max_keywords: int = 30
-
-    # Domain detection
-    auto_detect_domain: bool = True
-    suggest_terms: bool = True
-
-    # Context enhancement
-    enhance_with_common_terms: bool = True
-    validate_speaker_names: bool = True
-
-
-@dataclass
 class AppDeps:
     """Main application dependencies container"""
 
