@@ -42,8 +42,8 @@ def estimate_transcription_cost(
     - Output: $3.00
 
     Gemini 3 Pro Preview pricing (per 1M tokens):
-    - Input: $2.50
-    - Output: $10.00
+    - <200k tokens: Input $2.00, Output $12.00
+    - >200k tokens: Input $4.00, Output $18.00
     """
 
     # Estimate tokens
@@ -56,8 +56,15 @@ def estimate_transcription_cost(
         input_cost = (input_tokens / 1_000_000) * 0.50
         output_cost = (output_tokens / 1_000_000) * 3.00
     else:  # Pro model
-        input_cost = (input_tokens / 1_000_000) * 2.50
-        output_cost = (output_tokens / 1_000_000) * 10.00
+        # Apply tiered pricing for Gemini 3 Pro
+        if max(input_tokens, output_tokens) > 200_000:
+            input_rate = 4.00
+            output_rate = 18.00
+        else:
+            input_rate = 2.00
+            output_rate = 12.00
+        input_cost = (input_tokens / 1_000_000) * input_rate
+        output_cost = (output_tokens / 1_000_000) * output_rate
 
     total_cost = input_cost + output_cost
 

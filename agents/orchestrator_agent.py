@@ -11,14 +11,14 @@ when to call each component based on the transcription needs.
 """
 
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.google import GoogleModelSettings
+from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
+from pydantic_ai.providers.google import GoogleProvider
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import logging
-import os
 
-from models import TranscriptSegment, TranscriptQuality
-from dependencies import TranscriptionDeps, AppDeps
+from models import TranscriptSegment
+from dependencies import AppDeps
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +61,13 @@ def create_orchestrator_agent(deps: AppDeps) -> Agent:
     Returns:
         Configured Pydantic AI Agent with registered tools
     """
-    # Ensure API key is set
-    os.environ["GOOGLE_API_KEY"] = deps.transcription.api_key
-
-    model_name = f"google-gla:{deps.transcription.model_name}"
+    model = GoogleModel(
+        deps.transcription.model_name,
+        provider=GoogleProvider(api_key=deps.transcription.api_key),
+    )
 
     agent: Agent[AppDeps, OrchestratorOutput] = Agent(
-        model_name,
+        model,
         deps_type=AppDeps,
         output_type=OrchestratorOutput,
         instructions="""You are an intelligent transcription orchestrator agent that autonomously produces high-quality transcripts.

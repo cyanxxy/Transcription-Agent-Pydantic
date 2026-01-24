@@ -13,6 +13,14 @@ import streamlit as st
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_GEMINI_MODELS = {
+    "gemini-3-flash-preview",
+    "gemini-3-pro-preview",
+}
+
+FLASH_THINKING_LEVELS = {"minimal", "low", "medium", "high"}
+PRO_THINKING_LEVELS = {"low", "high"}
+
 
 @dataclass
 class TranscriptionDeps:
@@ -46,15 +54,39 @@ class TranscriptionDeps:
 
     def __post_init__(self):
         """Initialize dependencies"""
+        # Normalize model name (accept optional provider prefix)
+        if self.model_name.startswith("google-gla:"):
+            self.model_name = self.model_name.split(":", 1)[1]
+
+        if self.model_name not in SUPPORTED_GEMINI_MODELS:
+            raise ValueError(
+                f"Unsupported model: {self.model_name}. "
+                f"Supported models: {sorted(SUPPORTED_GEMINI_MODELS)}"
+            )
+
+        if self.thinking_level not in FLASH_THINKING_LEVELS:
+            raise ValueError(
+                f"Invalid thinking_level: {self.thinking_level}. "
+                f"Allowed: {sorted(FLASH_THINKING_LEVELS)}"
+            )
+
+        if self.model_name.startswith("gemini-3-pro") and self.thinking_level not in PRO_THINKING_LEVELS:
+            raise ValueError(
+                f"thinking_level '{self.thinking_level}' is not supported by {self.model_name}. "
+                f"Allowed: {sorted(PRO_THINKING_LEVELS)}"
+            )
+
+        if self.chunk_duration_ms <= 0:
+            raise ValueError("chunk_duration_ms must be > 0")
+        if self.chunk_overlap_ms < 0:
+            raise ValueError("chunk_overlap_ms must be >= 0")
+        if self.chunk_overlap_ms >= self.chunk_duration_ms:
+            raise ValueError(
+                "chunk_overlap_ms must be less than chunk_duration_ms"
+            )
+
         # Create temp directory if it doesn't exist
         Path(self.temp_dir).mkdir(parents=True, exist_ok=True)
-
-        # Set API key in environment for Pydantic AI and Google GenAI SDK
-        # WARNING: This sets process-wide env vars. For multi-user/multi-tenant
-        # deployments, use per-request API key passing instead.
-        # This is safe for single-user local deployments.
-        os.environ["GOOGLE_API_KEY"] = self.api_key
-        os.environ["GEMINI_API_KEY"] = self.api_key  # For backward compatibility
 
     @property
     def chunk_size_bytes(self) -> int:

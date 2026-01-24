@@ -196,7 +196,7 @@ Available formats in Export tab:
 | Model | Speed | Cost | Use Case |
 |-------|-------|------|----------|
 | `gemini-3-flash-preview` | Fast | $0.50/$3.00 per 1M tokens | General use |
-| `gemini-3-pro-preview` | Slower | $2.50/$10.00 per 1M tokens | High accuracy |
+| `gemini-3-pro-preview` | Slower | $2.00/$12.00 per 1M tokens (<200k tokens) | High accuracy |
 
 ### Processing Settings
 

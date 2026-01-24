@@ -391,19 +391,7 @@ class TranscriptionWorkflow:
     def _cleanup_temp_files(self):
         """Clean up temporary files"""
         try:
-            temp_dir = self.deps.transcription.temp_dir
-
-            if os.path.exists(temp_dir):
-                # Clean up all audio files
-                for file in os.listdir(temp_dir):
-                    if file.endswith((".wav", ".mp3", ".m4a", ".ogg", ".flac")):
-                        file_path = os.path.join(temp_dir, file)
-                        try:
-                            os.remove(file_path)
-                        except OSError:
-                            pass
-
-                logger.info(f"Cleaned up temp files in {temp_dir}")
+            self.deps.transcription.cleanup()
         except Exception as e:
             logger.warning(f"Failed to clean up temp files: {e}")
 

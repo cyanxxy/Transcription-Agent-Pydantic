@@ -112,10 +112,14 @@ def render_sidebar():
         }
 
         current_model = StateManager.get_model_name()
+        model_values = list(model_options.values())
+        if current_model not in model_values:
+            current_model = model_values[0]
+            StateManager.set_model_name(current_model)
         selected_model = st.radio(
             "Model",
             options=list(model_options.keys()),
-            index=list(model_options.values()).index(current_model),
+            index=model_values.index(current_model),
             horizontal=True,
         )
 

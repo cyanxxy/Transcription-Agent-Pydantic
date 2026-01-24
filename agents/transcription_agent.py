@@ -4,7 +4,8 @@ Handles audio processing and transcription with Google Gemini
 """
 
 from pydantic_ai import Agent, BinaryContent
-from pydantic_ai.models.google import GoogleModelSettings
+from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
+from pydantic_ai.providers.google import GoogleProvider
 from typing import List, Optional, Dict, Any
 import asyncio
 import logging
@@ -26,18 +27,13 @@ logger = logging.getLogger(__name__)
 # Create main transcription agent with proper Pydantic AI setup
 def create_transcription_agent(deps: TranscriptionDeps) -> Agent:
     """Create a properly configured transcription agent"""
-    # Note: API key is already set in TranscriptionDeps.__post_init__
-
-    # Use model name string - Pydantic AI handles the rest
-    # Format: 'google-gla:model-name' for Google models
-    model_name = (
-        f"google-gla:{deps.model_name}"
-        if not deps.model_name.startswith("google-gla:")
-        else deps.model_name
+    model = GoogleModel(
+        deps.model_name,
+        provider=GoogleProvider(api_key=deps.api_key),
     )
 
     agent = Agent(
-        model_name,
+        model,
         deps_type=TranscriptionDeps,
         output_type=List[TranscriptSegment],
         instructions="""You are an expert audio transcription specialist using Gemini 3's advanced capabilities.
