@@ -88,69 +88,6 @@ def calculate_quality_metrics(
     }
 
 
-def detect_quality_issues(
-    deps: QualityDeps, segments: List[TranscriptSegment]
-) -> List[Dict[str, Any]]:
-    """Detect quality issues in transcript"""
-
-    issues = []
-
-    # Check for very short or long sentences
-    for i, segment in enumerate(segments):
-        words = segment.text.split()
-        word_count = len(words)
-
-        if word_count < deps.min_sentence_length:
-            issues.append(
-                {
-                    "type": "sentence_length",
-                    "segment": i,
-                    "message": f"Very short segment ({word_count} words)",
-                    "severity": "low",
-                }
-            )
-        elif word_count > deps.max_sentence_length:
-            issues.append(
-                {
-                    "type": "sentence_length",
-                    "segment": i,
-                    "message": f"Very long segment ({word_count} words)",
-                    "severity": "medium",
-                }
-            )
-
-    # Check for speaker changes
-    speakers = set(seg.speaker for seg in segments)
-    if len(speakers) > 10:
-        issues.append(
-            {
-                "type": "speaker_count",
-                "message": f"Unusually high number of speakers: {len(speakers)}",
-                "severity": "medium",
-            }
-        )
-
-    # Check for timestamp gaps
-    prev_timestamp = None
-    for i, segment in enumerate(segments):
-        if prev_timestamp:
-            gap = parse_timestamp_to_seconds(
-                segment.timestamp
-            ) - parse_timestamp_to_seconds(prev_timestamp)
-            if gap > 30:  # More than 30 seconds gap
-                issues.append(
-                    {
-                        "type": "timestamp_gap",
-                        "segment": i,
-                        "message": f"Large gap in timestamps ({gap:.1f} seconds)",
-                        "severity": "medium",
-                    }
-                )
-        prev_timestamp = segment.timestamp
-
-    return issues
-
-
 def calculate_overall_score(deps: QualityDeps, metrics: Dict[str, float]) -> float:
     """Calculate weighted overall quality score"""
 
@@ -186,23 +123,6 @@ def calculate_overall_score(deps: QualityDeps, metrics: Dict[str, float]) -> flo
         overall_score = 50.0  # Default middle score
 
     return min(100, max(0, overall_score))
-
-
-def count_syllables(word: str) -> int:
-    """Simple syllable counter"""
-    word = word.lower()
-    vowels = "aeiou"
-    syllables = 0
-    previous_was_vowel = False
-
-    for char in word:
-        is_vowel = char in vowels
-        if is_vowel and not previous_was_vowel:
-            syllables += 1
-        previous_was_vowel = is_vowel
-
-    # Ensure at least one syllable
-    return max(1, syllables)
 
 
 def calculate_timestamp_coverage(segments: List[TranscriptSegment]) -> float:

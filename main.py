@@ -4,7 +4,6 @@ Powered by Pydantic AI for robust transcription workflows
 """
 
 import streamlit as st
-import asyncio
 import logging
 from pathlib import Path
 import nest_asyncio
@@ -17,6 +16,7 @@ from workflow import TranscriptionWorkflow  # noqa: E402
 from state_manager import StateManager  # noqa: E402
 from models import ProcessingStatus  # noqa: E402
 from styles import apply_custom_styles  # noqa: E402
+from utils import run_async  # noqa: E402
 
 # Configure logging
 logging.basicConfig(
@@ -100,10 +100,10 @@ def render_sidebar():
     with st.sidebar:
         st.markdown("### Settings")
 
-        # Model Selection - Compact
+        # Model Selection - Gemini 3 only
         model_options = {
-            "Flash (Fast)": "gemini-2.5-flash",
-            "Pro (Quality)": "gemini-2.5-pro",
+            "Flash (Fast)": "gemini-3-flash-preview",
+            "Pro (Quality)": "gemini-3-pro-preview",
         }
 
         current_model = StateManager.get_model_name()
@@ -235,14 +235,10 @@ def render_transcript_display():
         with col1:
             if st.button("🔧 Auto-Format", use_container_width=True):
                 with st.spinner("Formatting..."):
-                    # Apply auto-formatting
                     workflow = TranscriptionWorkflow(StateManager.get_api_key())
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    edited_result = loop.run_until_complete(
+                    edited_result = run_async(
                         workflow.edit_transcript(result, "auto_format")
                     )
-                    loop.close()
                     StateManager.set_complete(edited_result)
                     st.success("Formatting applied!")
                     st.rerun()
@@ -250,12 +246,9 @@ def render_transcript_display():
             if st.button("🔤 Fix Capitalization", use_container_width=True):
                 with st.spinner("Fixing capitalization..."):
                     workflow = TranscriptionWorkflow(StateManager.get_api_key())
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    edited_result = loop.run_until_complete(
+                    edited_result = run_async(
                         workflow.edit_transcript(result, "fix_capitalization")
                     )
-                    loop.close()
                     StateManager.set_complete(edited_result)
                     st.success("Capitalization fixed!")
                     st.rerun()
@@ -275,9 +268,7 @@ def render_transcript_display():
                 if find_text:
                     with st.spinner("Replacing..."):
                         workflow = TranscriptionWorkflow(StateManager.get_api_key())
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        edited_result = loop.run_until_complete(
+                        edited_result = run_async(
                             workflow.edit_transcript(
                                 result,
                                 "find_replace",
@@ -287,7 +278,6 @@ def render_transcript_display():
                                 whole_word=whole_word,
                             )
                         )
-                        loop.close()
                         StateManager.set_complete(edited_result)
                         st.success("Replacements complete!")
                         st.rerun()
@@ -298,8 +288,6 @@ def render_transcript_display():
 
         quality = result.quality
 
-        # Overall score with color
-        # Unused: score_color = "green" if quality.overall_score >= 70 else "orange" if quality.overall_score >= 40 else "red"
         st.markdown(
             f"""
             <div style='text-align: center; padding: 20px; 
@@ -361,12 +349,9 @@ def render_transcript_display():
 
         if st.button("📥 Download", type="primary", use_container_width=True):
             workflow = TranscriptionWorkflow(StateManager.get_api_key())
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            export_content = loop.run_until_complete(
+            export_content = run_async(
                 workflow.export_transcript(result, format_map[export_format])
             )
-            loop.close()
 
             # Create download button
             st.download_button(
@@ -390,7 +375,7 @@ def main():
     col1, col2 = st.columns([10, 1])
     with col1:
         st.title("ExactTranscriber")
-        st.caption("Audio transcription with Google Gemini 2.5")
+        st.caption("Audio transcription with Google Gemini 3")
     with col2:
         if state.transcript_result and st.button("New"):
             StateManager.reset_state()
@@ -463,10 +448,7 @@ def main():
                 )
 
                 # Run transcription with proper event loop handling
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(handle_transcription(workflow, uploaded_file))
-                loop.close()
+                run_async(handle_transcription(workflow, uploaded_file))
 
     elif state.status == ProcessingStatus.PROCESSING:
         # Show processing status

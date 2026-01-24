@@ -40,7 +40,7 @@ def create_transcription_agent(deps: TranscriptionDeps) -> Agent:
         model_name,
         deps_type=TranscriptionDeps,
         output_type=List[TranscriptSegment],
-        system_prompt="""You are an expert audio transcription specialist using Gemini's advanced capabilities.
+        instructions="""You are an expert audio transcription specialist using Gemini 3's advanced capabilities.
 
     OBJECTIVE:
     - Produce highly accurate transcripts for any supplied audio.
@@ -64,10 +64,6 @@ def create_transcription_agent(deps: TranscriptionDeps) -> Agent:
     )
 
     return agent
-
-
-# Initialize default agent for backward compatibility
-transcription_agent: Optional[Agent[TranscriptionDeps, List[TranscriptSegment]]] = None
 
 
 async def validate_audio_file(
@@ -268,19 +264,20 @@ def _guess_media_type(path: str) -> str:
 
 
 def _build_google_settings(deps: TranscriptionDeps) -> GoogleModelSettings:
-    """Build Google model settings from dependencies"""
+    """Build Google model settings from dependencies for Gemini 3"""
     settings_kwargs: Dict[str, Any] = {
-        "temperature": deps.temperature,
+        "temperature": 1.0,  # Gemini 3 works best at default temperature
         "max_tokens": deps.max_output_tokens,
     }
 
-    thinking_config: Dict[str, Any] = {}
-    if deps.thinking_budget >= 0:
-        thinking_config["thinking_budget"] = deps.thinking_budget
+    # Gemini 3 uses thinking_level instead of thinking_budget
+    thinking_config: Dict[str, Any] = {
+        "thinking_level": deps.thinking_level,
+    }
     if deps.enable_thought_summaries:
         thinking_config["include_thoughts"] = True
-    if thinking_config:
-        settings_kwargs["google_thinking_config"] = thinking_config
+
+    settings_kwargs["google_thinking_config"] = thinking_config
 
     return GoogleModelSettings(**settings_kwargs)
 

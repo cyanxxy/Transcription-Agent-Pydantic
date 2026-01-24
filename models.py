@@ -201,7 +201,7 @@ class AppState(BaseModel):
     edit_history: List[EditOperation] = Field(default_factory=list)
     error: Optional[ErrorDetail] = None
     api_key_configured: bool = False
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = "gemini-3-flash-preview"
     processing_progress: float = Field(0.0, ge=0, le=1)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

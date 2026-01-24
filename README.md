@@ -1,10 +1,10 @@
 # ExactTranscriber
 
-Audio transcription application built with Pydantic AI and Google Gemini 2.5 models. Features speaker diarization, automatic chunking for large files, and comprehensive quality analysis.
+Audio transcription application built with Pydantic AI and Google Gemini 3 models. Features speaker diarization, automatic chunking for large files, and comprehensive quality analysis.
 
 ## Features
 
-- **Transcription** - Gemini 2.5 Flash/Pro with speaker diarization
+- **Transcription** - Gemini 3 Flash/Pro with speaker diarization
 - **Smart Chunking** - Automatic splitting of large files with context preservation
 - **Context-Aware** - Provide speaker names, technical terms, and domain context
 - **Quality Metrics** - Readability, vocabulary richness, speaker consistency scoring
@@ -145,8 +145,8 @@ Available formats in Export tab:
 
 | Model | Speed | Cost | Use Case |
 |-------|-------|------|----------|
-| `gemini-2.5-flash` | Fast | ~$0.005/min | General use |
-| `gemini-2.5-pro` | Slower | ~$0.08/min | High accuracy |
+| `gemini-3-flash-preview` | Fast | $0.50/$3.00 per 1M tokens | General use |
+| `gemini-3-pro-preview` | Slower | $2.50/$10.00 per 1M tokens | High accuracy |
 
 ### Processing Settings
 
@@ -155,7 +155,8 @@ Edit `dependencies.py`:
 ```python
 @dataclass
 class TranscriptionDeps:
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = "gemini-3-flash-preview"
+    thinking_level: str = "high"       # minimal, low, medium (Flash), high
     max_file_size_mb: int = 200
     chunk_duration_ms: int = 120000    # 2 minutes
     chunk_overlap_ms: int = 5000       # 5 seconds overlap
@@ -216,9 +217,9 @@ python -m pytest tests/ -v
 ### Dependencies
 
 **Core:**
-- `pydantic-ai>=0.0.50` - Agent framework
+- `pydantic-ai>=1.0.0` - Agent framework
 - `pydantic>=2.5.0` - Data validation
-- `streamlit==1.32.0` - Web UI
+- `streamlit>=1.32.0` - Web UI
 - `google-genai>=1.10.0` - Gemini SDK
 
 **Audio:**

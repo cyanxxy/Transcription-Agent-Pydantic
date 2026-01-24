@@ -19,7 +19,7 @@ class TranscriptionDeps:
     """Dependencies for transcription agent"""
 
     api_key: str
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = "gemini-3-flash-preview"  # Gemini 3 Flash (default)
     max_file_size_mb: int = 200
     chunk_duration_ms: int = 120000  # 2 minutes
     chunk_overlap_ms: int = 5000  # 5 seconds overlap
@@ -30,31 +30,21 @@ class TranscriptionDeps:
     retry_delay: float = 1.0
     timeout_seconds: int = 300
 
-    # Gemini 2.5 specific settings
-    thinking_budget: int = -1  # -1 for dynamic, 0 to disable, or specific token count
+    # Gemini 3 specific settings
+    thinking_level: str = "high"  # Options: "minimal", "low", "medium" (Flash only), "high"
     enable_thought_summaries: bool = True
-    max_input_tokens: int = 1048576  # 1M tokens for Gemini 2.5
+    max_input_tokens: int = 1048576  # 1M tokens for Gemini 3
     max_output_tokens: int = 65536  # 65K tokens output limit
     enable_structured_output: bool = True
-    temperature: float = 0.2  # Lower for more consistent transcription
 
     # Smart chunking settings
     adaptive_chunk_size: bool = True  # Adjust chunk size based on audio complexity
     preserve_context: bool = True  # Pass previous chunk summary to next chunk
-    smart_overlap: bool = True  # Detect sentence boundaries for overlap
-
-    # Quality thresholds
-    min_quality_score: float = 40.0
-    target_quality_score: float = 70.0
 
     # Processing options
     auto_format: bool = True
     remove_fillers: bool = False
     fix_capitalization: bool = True
-
-    # Cache settings (removed - no caching)
-    use_cache: bool = False
-    cache_dir: Optional[str] = None
 
     def __post_init__(self):
         """Initialize dependencies"""
@@ -222,7 +212,7 @@ class AppDeps:
             return None
 
         # Get other settings from session state
-        model_name = getattr(st.session_state, "model_name", "gemini-2.5-flash")
+        model_name = getattr(st.session_state, "model_name", "gemini-3-flash-preview")
         auto_format = getattr(st.session_state, "auto_format", True)
         remove_fillers = getattr(st.session_state, "remove_fillers", False)
 
