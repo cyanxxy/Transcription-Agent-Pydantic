@@ -13,13 +13,21 @@ python-multipart>=0.0.6
 aiofiles>=23.2.1
 nest-asyncio>=1.5.6
 
-# Data processing (dependencies of other packages)
+# Data processing
 protobuf==4.25.1
 
-# Development dependencies (optional)
-pytest>=8.2.2
-pytest-mock>=3.14.0
-pytest-asyncio>=0.21.0
-ruff>=0.1.0
-black>=23.0.0
-mypy>=1.0.0
+# ============================================================
+# OPTIONAL: Timestamp correction with NVIDIA Parakeet + NeMo
+# ============================================================
+# These packages are NOT required for basic transcription.
+# Install separately if you want accurate timestamps:
+#
+#   pip install nemo_toolkit[asr] torch torchaudio
+#
+# Requirements:
+# - ~3GB disk space for models
+# - CUDA GPU recommended (works on CPU but slower)
+#
+# The agent will gracefully skip timestamp correction if
+# NeMo is not installed.
+# ============================================================

@@ -26,19 +26,12 @@ class TranscriptionDeps:
     temp_dir: str = field(
         default_factory=lambda: tempfile.mkdtemp(prefix="transcriber_")
     )
-    max_retries: int = 3
-    retry_delay: float = 1.0
-    timeout_seconds: int = 300
 
     # Gemini 3 specific settings
     thinking_level: str = "high"  # Options: "minimal", "low", "medium" (Flash only), "high"
-    enable_thought_summaries: bool = True
-    max_input_tokens: int = 1048576  # 1M tokens for Gemini 3
     max_output_tokens: int = 65536  # 65K tokens output limit
-    enable_structured_output: bool = True
 
-    # Smart chunking settings
-    adaptive_chunk_size: bool = True  # Adjust chunk size based on audio complexity
+    # Chunking settings
     preserve_context: bool = True  # Pass previous chunk summary to next chunk
 
     # Processing options
@@ -46,12 +39,20 @@ class TranscriptionDeps:
     remove_fillers: bool = False
     fix_capitalization: bool = True
 
+    # Orchestrator settings
+    # Note: Agent autonomously decides whether to use Parakeet (no enable flag)
+    parakeet_model: str = "nvidia/parakeet-ctc-0.6b"
+    use_orchestrator: bool = True  # Enable agentic orchestration
+
     def __post_init__(self):
         """Initialize dependencies"""
         # Create temp directory if it doesn't exist
         Path(self.temp_dir).mkdir(parents=True, exist_ok=True)
 
         # Set API key in environment for Pydantic AI and Google GenAI SDK
+        # WARNING: This sets process-wide env vars. For multi-user/multi-tenant
+        # deployments, use per-request API key passing instead.
+        # This is safe for single-user local deployments.
         os.environ["GOOGLE_API_KEY"] = self.api_key
         os.environ["GEMINI_API_KEY"] = self.api_key  # For backward compatibility
 
@@ -181,8 +182,36 @@ class AppDeps:
 
     @classmethod
     def from_config(cls, api_key: str, **kwargs) -> "AppDeps":
-        """Create dependencies from configuration"""
-        transcription = TranscriptionDeps(api_key=api_key, **kwargs)
+        """Create dependencies from configuration
+
+        Supported kwargs:
+        - model_name: Gemini model to use
+        - auto_format: Enable auto-formatting
+        - remove_fillers: Remove filler words
+        - use_orchestrator: Enable agentic orchestration (recommended)
+        - parakeet_model: NeMo model for timestamp correction
+
+        Note: Timestamp correction is decided autonomously by the agent.
+        """
+        # Extract transcription-specific kwargs
+        transcription_kwargs = {
+            k: v
+            for k, v in kwargs.items()
+            if k
+            in [
+                "model_name",
+                "auto_format",
+                "remove_fillers",
+                "use_orchestrator",
+                "parakeet_model",
+                "thinking_level",
+                "max_file_size_mb",
+                "chunk_duration_ms",
+                "chunk_overlap_ms",
+                "preserve_context",
+            ]
+        }
+        transcription = TranscriptionDeps(api_key=api_key, **transcription_kwargs)
         editing = EditingDeps(remove_fillers=transcription.remove_fillers)
         return cls(transcription=transcription, editing=editing)
 

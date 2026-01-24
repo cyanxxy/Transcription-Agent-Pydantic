@@ -270,14 +270,10 @@ def _build_google_settings(deps: TranscriptionDeps) -> GoogleModelSettings:
         "max_tokens": deps.max_output_tokens,
     }
 
-    # Gemini 3 uses thinking_level instead of thinking_budget
-    thinking_config: Dict[str, Any] = {
+    # Gemini 3 uses thinking_level (include_thoughts not supported by Pydantic AI)
+    settings_kwargs["google_thinking_config"] = {
         "thinking_level": deps.thinking_level,
     }
-    if deps.enable_thought_summaries:
-        thinking_config["include_thoughts"] = True
-
-    settings_kwargs["google_thinking_config"] = thinking_config
 
     return GoogleModelSettings(**settings_kwargs)
 

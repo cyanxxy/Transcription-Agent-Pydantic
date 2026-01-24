@@ -105,6 +105,12 @@ class TranscriptResult(BaseModel):
     model_used: str
     created_at: datetime = Field(default_factory=datetime.now)
     edited: bool = Field(False)
+    timestamps_corrected: bool = Field(
+        False, description="Whether timestamps were corrected with Parakeet"
+    )
+    orchestrator_used: bool = Field(
+        False, description="Whether agentic orchestrator was used"
+    )
     export_formats_available: List[str] = Field(
         default_factory=lambda: ["txt", "srt", "json"]
     )

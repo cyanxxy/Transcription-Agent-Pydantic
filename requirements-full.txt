@@ -1,0 +1,21 @@
+# ExactTranscriber v2.0 - Full Requirements (including NeMo)
+# Python 3.11+ required
+# Use this if you want accurate timestamp correction with Parakeet
+
+# Include base requirements
+-r requirements.txt
+
+# Timestamp correction with NVIDIA Parakeet + NeMo
+# Note: Requires ~3GB disk space for models
+# CUDA GPU recommended but not required
+nemo_toolkit[asr]>=2.0.0
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Development dependencies
+pytest>=8.2.2
+pytest-mock>=3.14.0
+pytest-asyncio>=0.21.0
+ruff>=0.1.0
+black>=23.0.0
+mypy>=1.0.0

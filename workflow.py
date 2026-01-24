@@ -1,6 +1,11 @@
 """
 Main Workflow Coordinator using Pydantic AI
 Orchestrates the entire transcription pipeline
+
+Supports two modes:
+1. Agentic Orchestrator (default): Uses an AI agent to coordinate transcription,
+   timestamp correction, and quality analysis
+2. Direct Pipeline: Manual coordination of transcription steps
 """
 
 from typing import Optional, Callable, List, Dict, Any
@@ -28,6 +33,9 @@ from agents.transcription_agent import (
     run_transcription_agent,
 )
 
+# Import orchestrator
+from agents.orchestrator_agent import run_orchestrator, OrchestratorOutput
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,7 +62,12 @@ class TranscriptionWorkflow:
         custom_prompt: Optional[str] = None,
         user_context: Optional[Dict[str, Any]] = None,
     ) -> TranscriptResult:
-        """Main transcription workflow with streaming progress"""
+        """Main transcription workflow with streaming progress
+
+        Supports two modes:
+        1. Agentic Orchestrator (default): AI agent coordinates all steps
+        2. Direct Pipeline: Manual step-by-step processing
+        """
 
         self.current_status = ProcessingStatus.PROCESSING
         self.current_file = filename
@@ -65,7 +78,9 @@ class TranscriptionWorkflow:
             if progress_callback:
                 progress_callback("Validating audio file...", 0.1)
 
-            validation = await validate_audio_file(self.deps.transcription, file_data, filename)
+            validation = await validate_audio_file(
+                self.deps.transcription, file_data, filename
+            )
 
             if not validation.get("valid"):
                 raise ValueError(validation.get("error", "Invalid audio file"))
@@ -100,9 +115,14 @@ class TranscriptionWorkflow:
                 else:
                     custom_prompt = context_prompt
 
-            # Step 3: Transcribe (with chunking if needed)
-            if metadata.needs_chunking:
-                segments = await self._transcribe_with_chunks(
+            # Check if orchestrator is enabled
+            use_orchestrator = getattr(
+                self.deps.transcription, "use_orchestrator", True
+            )
+
+            if use_orchestrator:
+                # Use agentic orchestrator for coordinated transcription
+                segments, quality, timestamps_corrected = await self._transcribe_with_orchestrator(
                     temp_path,
                     metadata,
                     progress_callback,
@@ -110,36 +130,20 @@ class TranscriptionWorkflow:
                     speaker_names,
                 )
             else:
-                if progress_callback:
-                    progress_callback("Transcribing audio...", 0.5)
-
-                segments = await run_transcription_agent(
-                    self.transcription_agent,
-                    self.deps.transcription,
+                # Use direct pipeline (legacy mode)
+                segments = await self._transcribe_direct(
                     temp_path,
+                    metadata,
+                    progress_callback,
                     custom_prompt,
-                    None,
-                    None,
                     speaker_names,
                 )
 
-            # Step 3.5: Map speakers to context names if provided
-            if speaker_names:
-                segments = map_speakers_to_context(segments, speaker_names)
-
-            # Step 4: Auto-format if enabled
-            if self.deps.transcription.auto_format:
+                # Calculate quality metrics
                 if progress_callback:
-                    progress_callback("Formatting transcript...", 0.7)
-
-                # For now, skip auto-formatting as it needs separate agent setup
-                # segments = await self._apply_auto_format(segments)
-
-            # Step 5: Calculate quality metrics
-            if progress_callback:
-                progress_callback("Analyzing quality...", 0.8)
-
-            quality = await self._calculate_quality(segments)
+                    progress_callback("Analyzing quality...", 0.8)
+                quality = await self._calculate_quality(segments)
+                timestamps_corrected = False  # Direct mode doesn't use Parakeet
 
             # Step 6: Create final result
             processing_time = (datetime.now() - self.processing_start).total_seconds()
@@ -151,14 +155,13 @@ class TranscriptionWorkflow:
                 processing_time=processing_time,
                 model_used=self.deps.transcription.model_name,
                 edited=False,
+                timestamps_corrected=timestamps_corrected,
+                orchestrator_used=use_orchestrator,
             )
 
-            # Step 7: Validate quality using the tool
+            # Step 7: Finalize
             if progress_callback:
                 progress_callback("Finalizing...", 0.9)
-
-            # Quality validation is done through metrics calculation
-            # No need for separate validation call
 
             self.current_status = ProcessingStatus.COMPLETE
 
@@ -175,6 +178,127 @@ class TranscriptionWorkflow:
         finally:
             # Cleanup temp files
             self._cleanup_temp_files()
+
+    async def _transcribe_with_orchestrator(
+        self,
+        audio_path: str,
+        metadata: AudioMetadata,
+        progress_callback: Optional[Callable],
+        custom_prompt: Optional[str],
+        speaker_names: Optional[List[str]] = None,
+    ) -> tuple[List[TranscriptSegment], TranscriptQuality, bool]:
+        """Use agentic orchestrator for coordinated transcription
+
+        The orchestrator agent will:
+        1. Transcribe audio with Gemini
+        2. Correct timestamps with Parakeet (if enabled)
+        3. Calculate quality metrics
+        """
+        if progress_callback:
+            progress_callback("Running transcription orchestrator...", 0.3)
+
+        # Run the agentic orchestrator
+        orchestrator_result: OrchestratorOutput = await run_orchestrator(
+            deps=self.deps,
+            audio_path=audio_path,
+            context_prompt=custom_prompt,
+            speaker_names=speaker_names,
+        )
+
+        if progress_callback:
+            progress_callback("Processing orchestrator results...", 0.7)
+
+        # Extract segments from orchestrator result
+        segments = orchestrator_result.segments
+
+        # Map speakers to context names if provided and not already done
+        if speaker_names and segments:
+            segments = map_speakers_to_context(segments, speaker_names)
+
+        # Build quality object from orchestrator results
+        # The orchestrator already calculated quality, but we need full metrics
+        if segments:
+            quality = await self._calculate_quality(segments)
+            # Override overall score with orchestrator's score if valid
+            if orchestrator_result.quality_score > 0:
+                quality = TranscriptQuality(
+                    overall_score=orchestrator_result.quality_score,
+                    readability=quality.readability,
+                    punctuation_density=quality.punctuation_density,
+                    sentence_variety=quality.sentence_variety,
+                    vocabulary_richness=quality.vocabulary_richness,
+                    timestamp_coverage=quality.timestamp_coverage,
+                    speaker_consistency=quality.speaker_consistency,
+                    issues=quality.issues,
+                    warnings=quality.warnings + orchestrator_result.processing_notes,
+                )
+        else:
+            # No segments - create minimal quality object
+            quality = TranscriptQuality(
+                overall_score=0.0,
+                readability=0.0,
+                punctuation_density=0.0,
+                sentence_variety=0.0,
+                vocabulary_richness=0.0,
+                timestamp_coverage=0.0,
+                speaker_consistency=0.0,
+                issues=[{"type": "error", "message": "No segments transcribed"}],
+                warnings=orchestrator_result.processing_notes,
+            )
+
+        # Log orchestrator results
+        logger.info(
+            f"Orchestrator complete: {len(segments)} segments, "
+            f"quality={quality.overall_score:.1f}, "
+            f"timestamps_corrected={orchestrator_result.timestamp_corrected}"
+        )
+
+        return segments, quality, orchestrator_result.timestamp_corrected
+
+    async def _transcribe_direct(
+        self,
+        audio_path: str,
+        metadata: AudioMetadata,
+        progress_callback: Optional[Callable],
+        custom_prompt: Optional[str],
+        speaker_names: Optional[List[str]] = None,
+    ) -> List[TranscriptSegment]:
+        """Direct transcription pipeline (legacy mode, no orchestrator)"""
+
+        # Step 3: Transcribe (with chunking if needed)
+        if metadata.needs_chunking:
+            segments = await self._transcribe_with_chunks(
+                audio_path,
+                metadata,
+                progress_callback,
+                custom_prompt,
+                speaker_names,
+            )
+        else:
+            if progress_callback:
+                progress_callback("Transcribing audio...", 0.5)
+
+            segments = await run_transcription_agent(
+                self.transcription_agent,
+                self.deps.transcription,
+                audio_path,
+                custom_prompt,
+                None,
+                None,
+                speaker_names,
+            )
+
+        # Step 3.5: Map speakers to context names if provided
+        if speaker_names:
+            segments = map_speakers_to_context(segments, speaker_names)
+
+        # Step 4: Auto-format if enabled
+        if self.deps.transcription.auto_format:
+            if progress_callback:
+                progress_callback("Formatting transcript...", 0.7)
+            # Auto-formatting handled by editing tools if needed
+
+        return segments
 
     async def _transcribe_with_chunks(
         self,
@@ -404,10 +528,10 @@ class TranscriptionWorkflow:
 
                 text = "\n".join(lines[:2])  # Max 2 lines
 
-            # Add SRT entry
+            # Add SRT entry with speaker label
             srt_lines.append(str(i))
             srt_lines.append(f"{start_time} --> {end_time}")
-            srt_lines.append(text)
+            srt_lines.append(f"{segment.speaker}: {text}")
             srt_lines.append("")  # Empty line between entries
 
         return "\n".join(srt_lines)

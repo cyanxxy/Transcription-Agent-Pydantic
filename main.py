@@ -76,13 +76,18 @@ async def handle_transcription(workflow: TranscriptionWorkflow, file):
             status_text.empty()
 
             # Show success metrics
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Quality Score", f"{result.quality.overall_score:.1f}/100")
             with col2:
                 st.metric("Processing Time", f"{result.processing_time:.1f}s")
             with col3:
                 st.metric("Segments", len(result.segments))
+            with col4:
+                st.metric(
+                    "Timestamps",
+                    "Corrected" if result.timestamps_corrected else "Gemini"
+                )
 
             st.success("✅ Transcription complete!")
 
@@ -127,6 +132,20 @@ def render_sidebar():
 
         st.session_state.auto_format = auto_format
         st.session_state.remove_fillers = remove_fillers
+
+        # Orchestrator Options
+        st.markdown("**Advanced**")
+        use_orchestrator = st.checkbox(
+            "🤖 Agentic Mode",
+            value=True,
+            key="use_orch",
+            help="AI agent autonomously decides workflow (recommended)",
+        )
+
+        st.session_state.use_orchestrator = use_orchestrator
+
+        if use_orchestrator:
+            st.caption("Agent will analyze and decide if timestamps need correction")
 
         # Context Section
         st.markdown("---")
@@ -190,7 +209,7 @@ def render_sidebar():
         # Footer - Minimal
         st.markdown("---")
         st.caption(
-            "v2.0 | [Docs](https://github.com) | [API Key](https://makersuite.google.com)"
+            "v2.1 (Orchestrator) | [Docs](https://github.com) | [API Key](https://makersuite.google.com)"
         )
 
 
@@ -375,7 +394,7 @@ def main():
     col1, col2 = st.columns([10, 1])
     with col1:
         st.title("ExactTranscriber")
-        st.caption("Audio transcription with Google Gemini 3")
+        st.caption("Audio transcription with Gemini 3 + Parakeet timestamps")
     with col2:
         if state.transcript_result and st.button("New"):
             StateManager.reset_state()
@@ -439,12 +458,14 @@ def main():
             if st.button(
                 "🚀 Start Transcription", type="primary", use_container_width=True
             ):
-                # Initialize workflow
+                # Initialize workflow with options
+                # Note: In agentic mode, the agent decides autonomously about timestamps
                 workflow = TranscriptionWorkflow(
                     api_key=StateManager.get_api_key(),
                     model_name=StateManager.get_model_name(),
                     auto_format=st.session_state.get("auto_format", True),
                     remove_fillers=st.session_state.get("remove_fillers", False),
+                    use_orchestrator=st.session_state.get("use_orchestrator", True),
                 )
 
                 # Run transcription with proper event loop handling
