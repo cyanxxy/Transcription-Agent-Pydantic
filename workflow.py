@@ -11,7 +11,6 @@ Supports two modes:
 from typing import Optional, Callable, List, Dict, Any
 import logging
 from datetime import datetime
-import os
 
 from models import (
     TranscriptResult,
@@ -34,7 +33,11 @@ from agents.transcription_agent import (
 )
 
 # Import orchestrator
-from agents.orchestrator_agent import run_orchestrator, OrchestratorOutput
+from agents.orchestrator_agent import (
+    run_orchestrator,
+    create_orchestrator_agent,
+    OrchestratorOutput,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +49,21 @@ class TranscriptionWorkflow:
         """Initialize workflow with dependencies"""
         self.deps = AppDeps.from_config(api_key=api_key, **kwargs)
 
-        # Create the transcription agent with proper Pydantic AI setup
+        # Create agents once and reuse (avoids repeated GoogleProvider creation)
         self.transcription_agent = create_transcription_agent(self.deps.transcription)
+        self._orchestrator_agent = None
 
         # Track processing state
         self.current_status = ProcessingStatus.IDLE
         self.current_file = None
         self.processing_start = None
+
+    @property
+    def orchestrator_agent(self):
+        """Lazily create and cache the orchestrator agent"""
+        if self._orchestrator_agent is None:
+            self._orchestrator_agent = create_orchestrator_agent(self.deps)
+        return self._orchestrator_agent
 
     async def transcribe_audio(
         self,
@@ -122,12 +133,14 @@ class TranscriptionWorkflow:
 
             if use_orchestrator:
                 # Use agentic orchestrator for coordinated transcription
-                segments, quality, timestamps_corrected = await self._transcribe_with_orchestrator(
-                    temp_path,
-                    metadata,
-                    progress_callback,
-                    custom_prompt,
-                    speaker_names,
+                segments, quality, timestamps_corrected = (
+                    await self._transcribe_with_orchestrator(
+                        temp_path,
+                        metadata,
+                        progress_callback,
+                        custom_prompt,
+                        speaker_names,
+                    )
                 )
             else:
                 # Use direct pipeline (legacy mode)
@@ -197,12 +210,13 @@ class TranscriptionWorkflow:
         if progress_callback:
             progress_callback("Running transcription orchestrator...", 0.3)
 
-        # Run the agentic orchestrator
+        # Run the agentic orchestrator (reuse cached agent)
         orchestrator_result: OrchestratorOutput = await run_orchestrator(
             deps=self.deps,
             audio_path=audio_path,
             context_prompt=custom_prompt,
             speaker_names=speaker_names,
+            agent=self.orchestrator_agent,
         )
 
         if progress_callback:

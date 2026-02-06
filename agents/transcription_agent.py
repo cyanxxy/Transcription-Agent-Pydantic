@@ -6,6 +6,7 @@ Handles audio processing and transcription with Google Gemini
 from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
 from pydantic_ai.providers.google import GoogleProvider
+from pydantic_ai.usage import UsageLimits
 from typing import List, Optional, Dict, Any
 import asyncio
 import logging
@@ -111,9 +112,7 @@ async def validate_audio_file(
         return {"valid": False, "error": str(e)}
 
 
-async def process_audio_file(
-    deps: TranscriptionDeps, file_path: str
-) -> AudioMetadata:
+async def process_audio_file(deps: TranscriptionDeps, file_path: str) -> AudioMetadata:
     """Process and analyze audio file"""
     try:
         # Load audio in thread to avoid blocking
@@ -149,9 +148,7 @@ async def process_audio_file(
         raise
 
 
-async def chunk_audio(
-    deps: TranscriptionDeps, audio_path: str
-) -> List[Dict[str, Any]]:
+async def chunk_audio(deps: TranscriptionDeps, audio_path: str) -> List[Dict[str, Any]]:
     """Split audio into chunks for processing"""
     try:
         # Load audio in thread to avoid blocking
@@ -226,6 +223,7 @@ async def run_transcription_agent(
         [prompt, content],
         deps=deps,
         model_settings=model_settings,
+        usage_limits=UsageLimits(request_limit=5),
     )
 
     segments: List[TranscriptSegment] = result.output or []

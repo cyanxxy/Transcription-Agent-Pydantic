@@ -7,20 +7,38 @@ from typing import Any, Coroutine, Tuple, TypeVar
 
 T = TypeVar("T")
 
+# Gemini 3 pricing per 1M tokens (update when Google changes pricing)
+PRICING = {
+    "flash": {"input": 0.50, "output": 3.00},
+    "pro": {
+        "input_low": 2.00,
+        "output_low": 12.00,
+        "input_high": 4.00,
+        "output_high": 18.00,
+    },
+    "pro_tier_threshold": 200_000,  # token threshold for higher pricing tier
+}
+
 
 def run_async(coro: Coroutine[Any, Any, T]) -> T:
     """
     Run async coroutine in Streamlit context.
 
-    Creates a new event loop, runs the coroutine, and properly cleans up.
-    Use this wrapper for all async operations in the Streamlit UI.
+    Uses the existing event loop (patched by nest_asyncio) when available,
+    otherwise creates a new one. This avoids conflicts with nest_asyncio.apply().
     """
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("Loop is closed")
         return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
 
 
 def estimate_audio_tokens(duration_seconds: float) -> int:
@@ -53,16 +71,17 @@ def estimate_transcription_cost(
 
     # Calculate costs based on model
     if "flash" in model_name.lower():
-        input_cost = (input_tokens / 1_000_000) * 0.50
-        output_cost = (output_tokens / 1_000_000) * 3.00
+        input_cost = (input_tokens / 1_000_000) * PRICING["flash"]["input"]
+        output_cost = (output_tokens / 1_000_000) * PRICING["flash"]["output"]
     else:  # Pro model
         # Apply tiered pricing for Gemini 3 Pro
-        if max(input_tokens, output_tokens) > 200_000:
-            input_rate = 4.00
-            output_rate = 18.00
+        threshold = PRICING["pro_tier_threshold"]
+        if max(input_tokens, output_tokens) > threshold:
+            input_rate = PRICING["pro"]["input_high"]
+            output_rate = PRICING["pro"]["output_high"]
         else:
-            input_rate = 2.00
-            output_rate = 12.00
+            input_rate = PRICING["pro"]["input_low"]
+            output_rate = PRICING["pro"]["output_low"]
         input_cost = (input_tokens / 1_000_000) * input_rate
         output_cost = (output_tokens / 1_000_000) * output_rate
 
@@ -94,7 +113,10 @@ def format_duration(seconds: float) -> str:
 def sanitize_filename(filename: str) -> str:
     """Sanitize filename for safe file system usage"""
     import re
+    import os
 
+    # Strip directory components to prevent path traversal
+    filename = os.path.basename(filename)
     # Remove invalid characters
     clean = re.sub(r'[<>:"/\\|?*]', "_", filename)
     # Limit length

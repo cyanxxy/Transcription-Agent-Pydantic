@@ -25,6 +25,37 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _get_workflow(**kwargs) -> TranscriptionWorkflow:
+    """Get or create a cached TranscriptionWorkflow from session state"""
+    api_key = StateManager.get_api_key()
+    model_name = StateManager.get_model_name()
+    auto_format = st.session_state.get("auto_format", True)
+    remove_fillers = st.session_state.get("remove_fillers", False)
+    use_orchestrator = st.session_state.get("use_orchestrator", True)
+
+    # Build a cache key from current settings
+    cache_key = (api_key, model_name, auto_format, remove_fillers, use_orchestrator)
+
+    # Reuse cached workflow if settings haven't changed
+    if (
+        "workflow" in st.session_state
+        and st.session_state.get("workflow_cache_key") == cache_key
+    ):
+        return st.session_state.workflow
+
+    workflow = TranscriptionWorkflow(
+        api_key=api_key,
+        model_name=model_name,
+        auto_format=auto_format,
+        remove_fillers=remove_fillers,
+        use_orchestrator=use_orchestrator,
+        **kwargs,
+    )
+    st.session_state.workflow = workflow
+    st.session_state.workflow_cache_key = cache_key
+    return workflow
+
+
 def setup_page():
     """Configure Streamlit page settings"""
     st.set_page_config(
@@ -86,7 +117,7 @@ async def handle_transcription(workflow: TranscriptionWorkflow, file):
             with col4:
                 st.metric(
                     "Timestamps",
-                    "Corrected" if result.timestamps_corrected else "Gemini"
+                    "Corrected" if result.timestamps_corrected else "Gemini",
                 )
 
             st.success("✅ Transcription complete!")
@@ -258,7 +289,7 @@ def render_transcript_display():
         with col1:
             if st.button("🔧 Auto-Format", use_container_width=True):
                 with st.spinner("Formatting..."):
-                    workflow = TranscriptionWorkflow(StateManager.get_api_key())
+                    workflow = _get_workflow()
                     edited_result = run_async(
                         workflow.edit_transcript(result, "auto_format")
                     )
@@ -268,7 +299,7 @@ def render_transcript_display():
 
             if st.button("🔤 Fix Capitalization", use_container_width=True):
                 with st.spinner("Fixing capitalization..."):
-                    workflow = TranscriptionWorkflow(StateManager.get_api_key())
+                    workflow = _get_workflow()
                     edited_result = run_async(
                         workflow.edit_transcript(result, "fix_capitalization")
                     )
@@ -290,7 +321,7 @@ def render_transcript_display():
             if st.button("Replace All", type="primary", use_container_width=True):
                 if find_text:
                     with st.spinner("Replacing..."):
-                        workflow = TranscriptionWorkflow(StateManager.get_api_key())
+                        workflow = _get_workflow()
                         edited_result = run_async(
                             workflow.edit_transcript(
                                 result,
@@ -371,7 +402,7 @@ def render_transcript_display():
         }
 
         if st.button("📥 Download", type="primary", use_container_width=True):
-            workflow = TranscriptionWorkflow(StateManager.get_api_key())
+            workflow = _get_workflow()
             export_content = run_async(
                 workflow.export_transcript(result, format_map[export_format])
             )
@@ -462,15 +493,9 @@ def main():
             if st.button(
                 "🚀 Start Transcription", type="primary", use_container_width=True
             ):
-                # Initialize workflow with options
+                # Initialize workflow with options (cached)
                 # Note: In agentic mode, the agent decides autonomously about timestamps
-                workflow = TranscriptionWorkflow(
-                    api_key=StateManager.get_api_key(),
-                    model_name=StateManager.get_model_name(),
-                    auto_format=st.session_state.get("auto_format", True),
-                    remove_fillers=st.session_state.get("remove_fillers", False),
-                    use_orchestrator=st.session_state.get("use_orchestrator", True),
-                )
+                workflow = _get_workflow()
 
                 # Run transcription with proper event loop handling
                 run_async(handle_transcription(workflow, uploaded_file))

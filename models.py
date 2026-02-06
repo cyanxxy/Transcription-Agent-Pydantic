@@ -3,9 +3,9 @@ Pydantic models for ExactTranscriber v2.0
 Type-safe data models for the transcription workflow
 """
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, field_serializer, ConfigDict
 from typing import Optional, List, Dict, Any, Literal
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 
@@ -103,7 +103,7 @@ class TranscriptResult(BaseModel):
     quality: TranscriptQuality
     processing_time: float = Field(..., description="Processing time in seconds")
     model_used: str
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     edited: bool = Field(False)
     timestamps_corrected: bool = Field(
         False, description="Whether timestamps were corrected with Parakeet"
@@ -115,7 +115,9 @@ class TranscriptResult(BaseModel):
         default_factory=lambda: ["txt", "srt", "json"]
     )
 
-    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat()})
+    @field_serializer("created_at")
+    def serialize_datetime(self, v: datetime) -> str:
+        return v.isoformat()
 
     @property
     def full_text(self) -> str:
@@ -146,7 +148,7 @@ class EditOperation(BaseModel):
     target: Optional[str] = None
     replacement: Optional[str] = None
     options: Dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ExportConfig(BaseModel):
@@ -193,7 +195,7 @@ class ErrorDetail(BaseModel):
     message: str
     category: str
     details: Optional[Dict[str, Any]] = None
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     recoverable: bool = True
     suggested_action: Optional[str] = None
 

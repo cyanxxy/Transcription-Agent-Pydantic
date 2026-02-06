@@ -146,7 +146,9 @@ def _run_alignment_fallback(
             return segments
 
         # Extract word timestamps from Parakeet transcription
-        word_timestamps = _extract_timestamps_from_transcription(transcription_result[0])
+        word_timestamps = _extract_timestamps_from_transcription(
+            transcription_result[0]
+        )
 
         # Map to original segments using text matching
         return _map_to_segments_with_matching(segments, word_timestamps)
@@ -171,19 +173,23 @@ def _extract_word_timestamps(alignment_result) -> List[Dict[str, Any]]:
 
     if hasattr(alignment_result, "word_timestamps"):
         for word_info in alignment_result.word_timestamps:
-            word_timestamps.append({
-                "word": word_info.get("word", ""),
-                "start": word_info.get("start", 0.0),
-                "end": word_info.get("end", 0.0),
-            })
+            word_timestamps.append(
+                {
+                    "word": word_info.get("word", ""),
+                    "start": word_info.get("start", 0.0),
+                    "end": word_info.get("end", 0.0),
+                }
+            )
     elif isinstance(alignment_result, list):
         for item in alignment_result:
             if isinstance(item, dict):
-                word_timestamps.append({
-                    "word": item.get("word", item.get("text", "")),
-                    "start": item.get("start", item.get("start_time", 0.0)),
-                    "end": item.get("end", item.get("end_time", 0.0)),
-                })
+                word_timestamps.append(
+                    {
+                        "word": item.get("word", item.get("text", "")),
+                        "start": item.get("start", item.get("start_time", 0.0)),
+                        "end": item.get("end", item.get("end_time", 0.0)),
+                    }
+                )
 
     return word_timestamps
 
@@ -196,19 +202,23 @@ def _extract_timestamps_from_transcription(transcription) -> List[Dict[str, Any]
     if hasattr(transcription, "timestep") and transcription.timestep:
         # NeMo timestep format
         for ts in transcription.timestep:
-            word_timestamps.append({
-                "word": ts.get("word", ""),
-                "start": ts.get("start", 0.0),
-                "end": ts.get("end", 0.0),
-            })
+            word_timestamps.append(
+                {
+                    "word": ts.get("word", ""),
+                    "start": ts.get("start", 0.0),
+                    "end": ts.get("end", 0.0),
+                }
+            )
     elif hasattr(transcription, "words"):
         # Alternative format with words attribute
         for word_info in transcription.words:
-            word_timestamps.append({
-                "word": getattr(word_info, "word", ""),
-                "start": getattr(word_info, "start", 0.0),
-                "end": getattr(word_info, "end", 0.0),
-            })
+            word_timestamps.append(
+                {
+                    "word": getattr(word_info, "word", ""),
+                    "start": getattr(word_info, "start", 0.0),
+                    "end": getattr(word_info, "end", 0.0),
+                }
+            )
 
     return word_timestamps
 
@@ -240,12 +250,14 @@ def _map_to_segments(
             # Fallback to original timestamp
             accurate_ts = segment.timestamp
 
-        corrected.append(TranscriptSegment(
-            timestamp=accurate_ts,
-            speaker=segment.speaker,
-            text=segment.text,
-            confidence=segment.confidence,
-        ))
+        corrected.append(
+            TranscriptSegment(
+                timestamp=accurate_ts,
+                speaker=segment.speaker,
+                text=segment.text,
+                confidence=segment.confidence,
+            )
+        )
 
         # Advance word index
         word_idx += words_in_segment
@@ -286,12 +298,14 @@ def _map_to_segments_with_matching(
         else:
             accurate_ts = segment.timestamp
 
-        corrected.append(TranscriptSegment(
-            timestamp=accurate_ts,
-            speaker=segment.speaker,
-            text=segment.text,
-            confidence=segment.confidence,
-        ))
+        corrected.append(
+            TranscriptSegment(
+                timestamp=accurate_ts,
+                speaker=segment.speaker,
+                text=segment.text,
+                confidence=segment.confidence,
+            )
+        )
 
     return corrected
 

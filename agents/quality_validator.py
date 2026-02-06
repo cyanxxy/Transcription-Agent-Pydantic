@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def calculate_quality_metrics(
     deps: QualityDeps, segments: List[TranscriptSegment]
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """Calculate comprehensive quality metrics"""
 
     if not segments:

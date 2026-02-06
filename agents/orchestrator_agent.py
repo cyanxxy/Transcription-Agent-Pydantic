@@ -13,6 +13,7 @@ when to call each component based on the transcription needs.
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
 from pydantic_ai.providers.google import GoogleProvider
+from pydantic_ai.usage import UsageLimits
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import logging
@@ -110,13 +111,24 @@ Return the final OrchestratorOutput with:
     # Register the orchestrator tools
     _register_tools(agent)
 
+    @agent.output_validator
+    async def validate_output(
+        ctx: RunContext[AppDeps], output: OrchestratorOutput
+    ) -> OrchestratorOutput:
+        if output.quality_score > 0 and not output.segments:
+            raise ValueError(
+                "quality_score > 0 but no segments returned. "
+                "Please call transcribe_audio first."
+            )
+        return output
+
     return agent
 
 
 def _register_tools(agent: Agent[AppDeps, OrchestratorOutput]) -> None:
     """Register all orchestrator tools with the agent"""
 
-    @agent.tool
+    @agent.tool(retries=2)
     async def transcribe_audio(
         ctx: RunContext[AppDeps],
         audio_path: str,
@@ -211,7 +223,7 @@ def _register_tools(agent: Agent[AppDeps, OrchestratorOutput]) -> None:
                 "error": str(e),
             }
 
-    @agent.tool
+    @agent.tool(retries=2)
     async def fix_timestamps(
         ctx: RunContext[AppDeps],
         audio_path: str,
@@ -244,9 +256,7 @@ def _register_tools(agent: Agent[AppDeps, OrchestratorOutput]) -> None:
 
         try:
             # Convert dicts back to TranscriptSegment objects
-            transcript_segments = [
-                TranscriptSegment(**seg) for seg in segments
-            ]
+            transcript_segments = [TranscriptSegment(**seg) for seg in segments]
 
             corrected = await fix_timestamps_with_parakeet(
                 ctx.deps.transcription,
@@ -345,8 +355,10 @@ def _register_tools(agent: Agent[AppDeps, OrchestratorOutput]) -> None:
                     issues.append(f"Non-monotonic at segment {i}")
 
             # Check for irregular gaps
-            gaps = [timestamps_seconds[i] - timestamps_seconds[i - 1]
-                    for i in range(1, len(timestamps_seconds))]
+            gaps = [
+                timestamps_seconds[i] - timestamps_seconds[i - 1]
+                for i in range(1, len(timestamps_seconds))
+            ]
 
             if gaps:
                 avg_gap = sum(gaps) / len(gaps)
@@ -362,9 +374,11 @@ def _register_tools(agent: Agent[AppDeps, OrchestratorOutput]) -> None:
                 coverage = (last_ts / audio_duration) * 100 if audio_duration > 0 else 0
 
                 if coverage < 70:
-                    issues.append(f"Poor coverage: timestamps only reach {coverage:.0f}% of audio")
+                    issues.append(
+                        f"Poor coverage: timestamps only reach {coverage:.0f}% of audio"
+                    )
                 elif coverage > 110:
-                    issues.append(f"Timestamp drift: timestamps exceed audio duration")
+                    issues.append("Timestamp drift: timestamps exceed audio duration")
 
             # Calculate alignment score
             score = 100
@@ -436,9 +450,7 @@ def _register_tools(agent: Agent[AppDeps, OrchestratorOutput]) -> None:
 
         try:
             # Convert dicts to TranscriptSegment objects
-            transcript_segments = [
-                TranscriptSegment(**seg) for seg in segments
-            ]
+            transcript_segments = [TranscriptSegment(**seg) for seg in segments]
 
             # Calculate detailed metrics
             metrics = calculate_quality_metrics(ctx.deps.quality, transcript_segments)
@@ -488,6 +500,7 @@ async def run_orchestrator(
     audio_path: str,
     context_prompt: Optional[str] = None,
     speaker_names: Optional[List[str]] = None,
+    agent: Optional[Agent] = None,
 ) -> OrchestratorOutput:
     """
     Run the orchestrator agent to transcribe audio.
@@ -509,7 +522,8 @@ async def run_orchestrator(
     """
     logger.info(f"Starting orchestrator for {audio_path}")
 
-    agent = create_orchestrator_agent(deps)
+    if agent is None:
+        agent = create_orchestrator_agent(deps)
 
     # Build user message for orchestrator
     # Let the agent make autonomous decisions
@@ -546,6 +560,7 @@ Execute your workflow and make autonomous decisions:
             user_message,
             deps=deps,
             model_settings=model_settings,
+            usage_limits=UsageLimits(request_limit=15, tool_call_limit=10),
         )
 
         logger.info(

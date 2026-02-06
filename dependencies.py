@@ -4,7 +4,7 @@ Centralized configuration and dependencies
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 import os
 import tempfile
 from pathlib import Path
@@ -36,7 +36,9 @@ class TranscriptionDeps:
     )
 
     # Gemini 3 specific settings
-    thinking_level: str = "high"  # Options: "minimal", "low", "medium" (Flash only), "high"
+    thinking_level: str = (
+        "high"  # Options: "minimal", "low", "medium" (Flash only), "high"
+    )
     max_output_tokens: int = 65536  # 65K tokens output limit
 
     # Chunking settings
@@ -70,7 +72,10 @@ class TranscriptionDeps:
                 f"Allowed: {sorted(FLASH_THINKING_LEVELS)}"
             )
 
-        if self.model_name.startswith("gemini-3-pro") and self.thinking_level not in PRO_THINKING_LEVELS:
+        if (
+            self.model_name.startswith("gemini-3-pro")
+            and self.thinking_level not in PRO_THINKING_LEVELS
+        ):
             raise ValueError(
                 f"thinking_level '{self.thinking_level}' is not supported by {self.model_name}. "
                 f"Allowed: {sorted(PRO_THINKING_LEVELS)}"
@@ -81,9 +86,7 @@ class TranscriptionDeps:
         if self.chunk_overlap_ms < 0:
             raise ValueError("chunk_overlap_ms must be >= 0")
         if self.chunk_overlap_ms >= self.chunk_duration_ms:
-            raise ValueError(
-                "chunk_overlap_ms must be less than chunk_duration_ms"
-            )
+            raise ValueError("chunk_overlap_ms must be less than chunk_duration_ms")
 
         # Create temp directory if it doesn't exist
         Path(self.temp_dir).mkdir(parents=True, exist_ok=True)
@@ -121,7 +124,7 @@ class EditingDeps:
     fix_punctuation_spacing: bool = True
 
     # Filler words to remove
-    filler_words: list = field(
+    filler_words: List[str] = field(
         default_factory=lambda: [
             "um",
             "uh",
