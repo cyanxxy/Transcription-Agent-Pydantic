@@ -5,13 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "exact-transcriber"
 version = "2.0.0"
-description = "A Streamlit application for accurate audio transcription using Pydantic AI and Google Gemini"
+description = "A Streamlit judge-pipeline transcription app using Pydantic AI, Gemini, and optional Parakeet alignment"
 requires-python = ">=3.11"
 dependencies = [
     "streamlit>=1.38.0",
-    "pydantic-ai>=1.0.0",
+    "pydantic-ai>=1.67.0,<2",
     "pydantic>=2.5.0",
+    "google-genai>=1.67.0,<2",
     "pydub==0.25.1",
+    "audioop-lts>=0.2.2; python_version >= '3.13'",
     "python-multipart>=0.0.6",
     "aiofiles>=23.2.1",
     "nest-asyncio>=1.5.6",
@@ -31,4 +33,4 @@ dev = [
 authors = [{ name = "Mansour Damanpak", email = "50705400+cyanxxy@users.noreply.github.com" }]
 license = { text = "MIT" }
 readme = "README.md"
-keywords = ["transcription", "streamlit", "audio", "gemini"]
+keywords = ["transcription", "streamlit", "audio", "gemini", "pydantic-ai", "judge-pipeline", "parakeet"]

@@ -95,6 +95,26 @@ class TranscriptQuality(BaseModel):
             return "Poor"
 
 
+class TranscriptCandidate(BaseModel):
+    """A candidate transcript produced by one transcription model."""
+
+    candidate_id: str = Field(..., min_length=1)
+    label: str = Field(..., min_length=1)
+    kind: Literal["gemini", "parakeet"]
+    model_name: str = Field(..., min_length=1)
+    segments: List[TranscriptSegment] = Field(default_factory=list)
+    quality_score: Optional[float] = Field(None, ge=0, le=100)
+    notes: List[str] = Field(default_factory=list)
+
+
+class JudgeDecision(BaseModel):
+    """Final transcript selected or merged by the judge agent."""
+
+    segments: List[TranscriptSegment] = Field(default_factory=list)
+    selected_candidate_ids: List[str] = Field(default_factory=list)
+    processing_notes: List[str] = Field(default_factory=list)
+
+
 class TranscriptResult(BaseModel):
     """Complete transcription result"""
 
@@ -108,12 +128,22 @@ class TranscriptResult(BaseModel):
     timestamps_corrected: bool = Field(
         False, description="Whether timestamps were corrected with Parakeet"
     )
-    orchestrator_used: bool = Field(
-        False, description="Whether agentic orchestrator was used"
-    )
     export_formats_available: List[str] = Field(
         default_factory=lambda: ["txt", "srt", "json"]
     )
+    candidate_strategy: str = Field(
+        default="single_gemini",
+        description="How candidate transcripts were generated before judging",
+    )
+    candidates: List[TranscriptCandidate] = Field(default_factory=list)
+    judge_used: bool = Field(
+        False, description="Whether a judge agent selected or merged candidates"
+    )
+    judge_model_used: Optional[str] = Field(
+        None, description="Model name used by the judge agent"
+    )
+    judge_selected_candidate_ids: List[str] = Field(default_factory=list)
+    judge_notes: List[str] = Field(default_factory=list)
 
     @field_serializer("created_at")
     def serialize_datetime(self, v: datetime) -> str:
@@ -210,6 +240,13 @@ class AppState(BaseModel):
     error: Optional[ErrorDetail] = None
     api_key_configured: bool = False
     model_name: str = "gemini-3-flash-preview"
+    judge_model_name: str = "gemini-3.1-pro-preview"
+    candidate_strategy: Literal[
+        "single_gemini", "dual_gemini", "gemini_plus_parakeet"
+    ] = "dual_gemini"
+    use_judge_pipeline: bool = True
+    auto_format: bool = True
+    remove_fillers: bool = False
     processing_progress: float = Field(0.0, ge=0, le=1)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

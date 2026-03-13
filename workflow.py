@@ -3,18 +3,20 @@ Main Workflow Coordinator using Pydantic AI
 Orchestrates the entire transcription pipeline
 
 Supports two modes:
-1. Agentic Orchestrator (default): Uses an AI agent to coordinate transcription,
-   timestamp correction, and quality analysis
-2. Direct Pipeline: Manual coordination of transcription steps
+1. Judge Pipeline (default): Generate candidate transcripts, then judge and align
+2. Direct Pipeline: Manual single-model transcription without judging
 """
 
 from typing import Optional, Callable, List, Dict, Any
+from dataclasses import dataclass, replace
+import asyncio
 import logging
 from datetime import datetime
 
 from models import (
     TranscriptResult,
     TranscriptSegment,
+    TranscriptCandidate,
     AudioMetadata,
     TranscriptQuality,
     ProcessingStatus,
@@ -30,16 +32,30 @@ from agents.transcription_agent import (
     merge_chunks,
     map_speakers_to_context,
     run_transcription_agent,
+    adjust_timestamp,
 )
 
-# Import orchestrator
-from agents.orchestrator_agent import (
-    run_orchestrator,
-    create_orchestrator_agent,
-    OrchestratorOutput,
+from agents.judge_agent import (
+    create_judge_agent,
+    run_judge_agent,
+)
+from agents.timestamp_tool import (
+    analyze_timestamp_quality,
+    fix_timestamps_with_parakeet,
+    transcribe_with_parakeet,
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class JudgedUnitResult:
+    """Intermediate result for a chunk or full audio span."""
+
+    final_segments: List[TranscriptSegment]
+    candidates: List[TranscriptCandidate]
+    selected_candidate_ids: List[str]
+    judge_notes: List[str]
 
 
 class TranscriptionWorkflow:
@@ -51,7 +67,7 @@ class TranscriptionWorkflow:
 
         # Create agents once and reuse (avoids repeated GoogleProvider creation)
         self.transcription_agent = create_transcription_agent(self.deps.transcription)
-        self._orchestrator_agent = None
+        self._judge_agent = None
 
         # Track processing state
         self.current_status = ProcessingStatus.IDLE
@@ -59,11 +75,11 @@ class TranscriptionWorkflow:
         self.processing_start = None
 
     @property
-    def orchestrator_agent(self):
-        """Lazily create and cache the orchestrator agent"""
-        if self._orchestrator_agent is None:
-            self._orchestrator_agent = create_orchestrator_agent(self.deps)
-        return self._orchestrator_agent
+    def judge_agent(self):
+        """Lazily create and cache the judge agent."""
+        if self._judge_agent is None:
+            self._judge_agent = create_judge_agent(self.deps)
+        return self._judge_agent
 
     async def transcribe_audio(
         self,
@@ -76,7 +92,7 @@ class TranscriptionWorkflow:
         """Main transcription workflow with streaming progress
 
         Supports two modes:
-        1. Agentic Orchestrator (default): AI agent coordinates all steps
+        1. Judge Pipeline (default): candidate generation plus judge selection
         2. Direct Pipeline: Manual step-by-step processing
         """
 
@@ -126,22 +142,34 @@ class TranscriptionWorkflow:
                 else:
                     custom_prompt = context_prompt
 
-            # Check if orchestrator is enabled
-            use_orchestrator = getattr(
-                self.deps.transcription, "use_orchestrator", True
+            # Check if the judge pipeline is enabled
+            use_judge_pipeline = getattr(
+                self.deps.transcription, "use_judge_pipeline", True
             )
+            candidates: List[TranscriptCandidate] = []
+            judge_notes: List[str] = []
+            judge_used = False
+            judge_model_used: Optional[str] = None
+            judge_selected_candidate_ids: List[str] = []
 
-            if use_orchestrator:
-                # Use agentic orchestrator for coordinated transcription
-                segments, quality, timestamps_corrected = (
-                    await self._transcribe_with_orchestrator(
-                        temp_path,
-                        metadata,
-                        progress_callback,
-                        custom_prompt,
-                        speaker_names,
-                    )
+            if use_judge_pipeline:
+                # Use the multi-agent judge pipeline
+                (
+                    segments,
+                    quality,
+                    timestamps_corrected,
+                    candidates,
+                    judge_selected_candidate_ids,
+                    judge_notes,
+                ) = await self._transcribe_with_judge_pipeline(
+                    temp_path,
+                    metadata,
+                    progress_callback,
+                    custom_prompt,
+                    speaker_names,
                 )
+                judge_used = True
+                judge_model_used = self.deps.transcription.judge_model_name
             else:
                 # Use direct pipeline (legacy mode)
                 segments = await self._transcribe_direct(
@@ -169,7 +197,16 @@ class TranscriptionWorkflow:
                 model_used=self.deps.transcription.model_name,
                 edited=False,
                 timestamps_corrected=timestamps_corrected,
-                orchestrator_used=use_orchestrator,
+                candidate_strategy=(
+                    self.deps.transcription.candidate_strategy
+                    if judge_used
+                    else "single_gemini"
+                ),
+                candidates=candidates,
+                judge_used=judge_used,
+                judge_model_used=judge_model_used,
+                judge_selected_candidate_ids=judge_selected_candidate_ids,
+                judge_notes=judge_notes,
             )
 
             # Step 7: Finalize
@@ -192,62 +229,117 @@ class TranscriptionWorkflow:
             # Cleanup temp files
             self._cleanup_temp_files()
 
-    async def _transcribe_with_orchestrator(
+    async def _transcribe_with_judge_pipeline(
         self,
         audio_path: str,
         metadata: AudioMetadata,
         progress_callback: Optional[Callable],
         custom_prompt: Optional[str],
         speaker_names: Optional[List[str]] = None,
-    ) -> tuple[List[TranscriptSegment], TranscriptQuality, bool]:
-        """Use agentic orchestrator for coordinated transcription
-
-        The orchestrator agent will:
-        1. Transcribe audio with Gemini
-        2. Correct timestamps with Parakeet (if enabled)
-        3. Calculate quality metrics
-        """
+    ) -> tuple[
+        List[TranscriptSegment],
+        TranscriptQuality,
+        bool,
+        List[TranscriptCandidate],
+        List[str],
+        List[str],
+    ]:
+        """Run the candidate fan-out and judge fan-in pipeline."""
         if progress_callback:
-            progress_callback("Running transcription orchestrator...", 0.3)
+            progress_callback("Generating transcript candidates...", 0.3)
 
-        # Run the agentic orchestrator (reuse cached agent)
-        orchestrator_result: OrchestratorOutput = await run_orchestrator(
-            deps=self.deps,
-            audio_path=audio_path,
-            context_prompt=custom_prompt,
-            speaker_names=speaker_names,
-            agent=self.orchestrator_agent,
+        if metadata.needs_chunking:
+            audio_units = await chunk_audio(self.deps.transcription, audio_path)
+        else:
+            audio_units = [
+                {
+                    "path": audio_path,
+                    "index": 0,
+                    "start_ms": 0,
+                    "end_ms": int(metadata.duration * 1000),
+                    "duration_ms": int(metadata.duration * 1000),
+                }
+            ]
+
+        judged_chunks: List[List[TranscriptSegment]] = []
+        candidate_chunks: Dict[str, Dict[str, Any]] = {}
+        selected_candidate_ids: List[str] = []
+        judge_notes: List[str] = []
+        previous_context: Optional[str] = None
+
+        for index, unit_info in enumerate(audio_units):
+            if progress_callback:
+                base_progress = 0.3
+                step = 0.4 / max(len(audio_units), 1)
+                progress_callback(
+                    f"Judging transcript candidates {index + 1}/{len(audio_units)}...",
+                    base_progress + (step * index),
+                )
+
+            chunk_label = (
+                f"chunk {index + 1} of {len(audio_units)}"
+                if metadata.needs_chunking
+                else "the full audio file"
+            )
+            unit_chunk_info = unit_info if metadata.needs_chunking else None
+            unit_result = await self._run_unit_with_judge(
+                unit_info["path"],
+                unit_chunk_info,
+                custom_prompt,
+                previous_context,
+                speaker_names,
+                chunk_label,
+            )
+            judged_chunks.append(unit_result.final_segments)
+            selected_candidate_ids.extend(unit_result.selected_candidate_ids)
+            if metadata.needs_chunking:
+                judge_notes.extend(
+                    [f"{chunk_label}: {note}" for note in unit_result.judge_notes]
+                )
+            else:
+                judge_notes.extend(unit_result.judge_notes)
+
+            for candidate in unit_result.candidates:
+                bucket = candidate_chunks.setdefault(
+                    candidate.candidate_id,
+                    {
+                        "candidate": candidate.model_copy(
+                            update={"segments": [], "quality_score": None, "notes": []}
+                        ),
+                        "chunks": [],
+                        "notes": [],
+                    },
+                )
+                bucket["chunks"].append(candidate.segments)
+                bucket["notes"].extend(candidate.notes)
+
+            if unit_result.final_segments and self.deps.transcription.preserve_context:
+                previous_context = self._build_followup_context(
+                    unit_result.final_segments
+                )
+
+        if metadata.needs_chunking:
+            final_segments = await merge_chunks(self.deps.transcription, judged_chunks)
+        else:
+            final_segments = judged_chunks[0] if judged_chunks else []
+
+        candidates = await self._merge_candidate_chunks(candidate_chunks, speaker_names)
+
+        if speaker_names and final_segments:
+            final_segments = map_speakers_to_context(final_segments, speaker_names)
+
+        final_segments, timestamps_corrected, timestamp_notes = (
+            await self._review_timestamps(audio_path, metadata, final_segments)
         )
+        judge_notes.extend(timestamp_notes)
 
-        if progress_callback:
-            progress_callback("Processing orchestrator results...", 0.7)
-
-        # Extract segments from orchestrator result
-        segments = orchestrator_result.segments
-
-        # Map speakers to context names if provided and not already done
-        if speaker_names and segments:
-            segments = map_speakers_to_context(segments, speaker_names)
-
-        # Build quality object from orchestrator results
-        # The orchestrator already calculated quality, but we need full metrics
-        if segments:
-            quality = await self._calculate_quality(segments)
-            # Override overall score with orchestrator's score if valid
-            if orchestrator_result.quality_score > 0:
-                quality = TranscriptQuality(
-                    overall_score=orchestrator_result.quality_score,
-                    readability=quality.readability,
-                    punctuation_density=quality.punctuation_density,
-                    sentence_variety=quality.sentence_variety,
-                    vocabulary_richness=quality.vocabulary_richness,
-                    timestamp_coverage=quality.timestamp_coverage,
-                    speaker_consistency=quality.speaker_consistency,
-                    issues=quality.issues,
-                    warnings=quality.warnings + orchestrator_result.processing_notes,
+        if final_segments:
+            quality = await self._calculate_quality(final_segments)
+            if judge_notes:
+                quality = quality.model_copy(
+                    update={"warnings": quality.warnings + judge_notes}
                 )
         else:
-            # No segments - create minimal quality object
             quality = TranscriptQuality(
                 overall_score=0.0,
                 readability=0.0,
@@ -257,17 +349,241 @@ class TranscriptionWorkflow:
                 timestamp_coverage=0.0,
                 speaker_consistency=0.0,
                 issues=[{"type": "error", "message": "No segments transcribed"}],
-                warnings=orchestrator_result.processing_notes,
+                warnings=judge_notes,
             )
 
-        # Log orchestrator results
         logger.info(
-            f"Orchestrator complete: {len(segments)} segments, "
+            f"Judge pipeline complete: {len(final_segments)} segments, "
             f"quality={quality.overall_score:.1f}, "
-            f"timestamps_corrected={orchestrator_result.timestamp_corrected}"
+            f"timestamps_corrected={timestamps_corrected}"
         )
 
-        return segments, quality, orchestrator_result.timestamp_corrected
+        return (
+            final_segments,
+            quality,
+            timestamps_corrected,
+            candidates,
+            list(dict.fromkeys(selected_candidate_ids)),
+            judge_notes,
+        )
+
+    async def _run_unit_with_judge(
+        self,
+        audio_path: str,
+        chunk_info: Optional[Dict[str, Any]],
+        custom_prompt: Optional[str],
+        previous_context: Optional[str],
+        speaker_names: Optional[List[str]],
+        chunk_label: str,
+    ) -> JudgedUnitResult:
+        """Generate candidates for one audio span and judge them."""
+        candidates = await self._generate_candidates(
+            audio_path,
+            chunk_info,
+            custom_prompt,
+            previous_context,
+            speaker_names,
+        )
+        valid_candidates = [candidate for candidate in candidates if candidate.segments]
+
+        if not valid_candidates:
+            notes = []
+            for candidate in candidates:
+                notes.extend(candidate.notes)
+            if not notes:
+                notes = ["No candidate transcription produced segments."]
+            return JudgedUnitResult(
+                final_segments=[],
+                candidates=candidates,
+                selected_candidate_ids=[],
+                judge_notes=notes,
+            )
+
+        judge_decision = await run_judge_agent(
+            deps=self.deps,
+            candidates=valid_candidates,
+            context_prompt=custom_prompt,
+            speaker_names=speaker_names,
+            chunk_label=chunk_label,
+            agent=self.judge_agent,
+        )
+        judge_notes = list(judge_decision.processing_notes)
+        if judge_decision.selected_candidate_ids:
+            judge_notes.append(
+                "Judge selected: " + ", ".join(judge_decision.selected_candidate_ids)
+            )
+
+        final_segments = judge_decision.segments or valid_candidates[0].segments
+        return JudgedUnitResult(
+            final_segments=final_segments,
+            candidates=candidates,
+            selected_candidate_ids=list(judge_decision.selected_candidate_ids),
+            judge_notes=judge_notes,
+        )
+
+    async def _generate_candidates(
+        self,
+        audio_path: str,
+        chunk_info: Optional[Dict[str, Any]],
+        custom_prompt: Optional[str],
+        previous_context: Optional[str],
+        speaker_names: Optional[List[str]],
+    ) -> List[TranscriptCandidate]:
+        """Run the configured candidate transcription plan for one audio span."""
+        specs = self.deps.transcription.resolve_candidate_specs()
+        tasks = [
+            self._run_candidate_spec(
+                spec,
+                audio_path,
+                chunk_info,
+                custom_prompt,
+                previous_context,
+                speaker_names,
+            )
+            for spec in specs
+        ]
+        return list(await asyncio.gather(*tasks))
+
+    async def _run_candidate_spec(
+        self,
+        spec: Dict[str, str],
+        audio_path: str,
+        chunk_info: Optional[Dict[str, Any]],
+        custom_prompt: Optional[str],
+        previous_context: Optional[str],
+        speaker_names: Optional[List[str]],
+    ) -> TranscriptCandidate:
+        """Execute a single candidate transcription run."""
+        notes: List[str] = []
+        segments: List[TranscriptSegment] = []
+
+        try:
+            if spec["kind"] == "gemini":
+                candidate_deps = replace(
+                    self.deps.transcription, model_name=spec["model_name"]
+                )
+                candidate_agent = create_transcription_agent(candidate_deps)
+                segments = await run_transcription_agent(
+                    candidate_agent,
+                    candidate_deps,
+                    audio_path,
+                    custom_prompt,
+                    chunk_info,
+                    previous_context,
+                    speaker_names,
+                )
+            else:
+                segments = await transcribe_with_parakeet(
+                    self.deps.transcription,
+                    audio_path,
+                    speaker_names,
+                )
+                if chunk_info and chunk_info.get("start_ms"):
+                    offset_seconds = chunk_info["start_ms"] / 1000.0
+                    if offset_seconds > 0:
+                        segments = [
+                            segment.model_copy(
+                                update={
+                                    "timestamp": adjust_timestamp(
+                                        segment.timestamp, offset_seconds
+                                    )
+                                }
+                            )
+                            for segment in segments
+                        ]
+            notes.append(f"Generated by {spec['model_name']}")
+        except ImportError as exc:
+            notes.append(f"{spec['label']} unavailable: {exc}")
+        except Exception as exc:
+            notes.append(f"{spec['label']} failed: {exc}")
+
+        quality_score = None
+        if segments:
+            candidate_quality = await self._calculate_quality(segments)
+            quality_score = candidate_quality.overall_score
+
+        return TranscriptCandidate(
+            candidate_id=spec["candidate_id"],
+            label=spec["label"],
+            kind=spec["kind"],
+            model_name=spec["model_name"],
+            segments=segments,
+            quality_score=quality_score,
+            notes=notes,
+        )
+
+    async def _merge_candidate_chunks(
+        self,
+        candidate_chunks: Dict[str, Dict[str, Any]],
+        speaker_names: Optional[List[str]],
+    ) -> List[TranscriptCandidate]:
+        """Merge per-chunk candidates back into full-audio candidates."""
+        merged_candidates = []
+
+        for bucket in candidate_chunks.values():
+            candidate = bucket["candidate"]
+            chunks = bucket["chunks"]
+            if not chunks:
+                merged_segments: List[TranscriptSegment] = []
+            elif len(chunks) == 1:
+                merged_segments = chunks[0]
+            else:
+                merged_segments = await merge_chunks(self.deps.transcription, chunks)
+
+            if speaker_names and merged_segments:
+                merged_segments = map_speakers_to_context(merged_segments, speaker_names)
+
+            quality_score = None
+            if merged_segments:
+                candidate_quality = await self._calculate_quality(merged_segments)
+                quality_score = candidate_quality.overall_score
+
+            merged_candidates.append(
+                candidate.model_copy(
+                    update={
+                        "segments": merged_segments,
+                        "quality_score": quality_score,
+                        "notes": list(dict.fromkeys(bucket["notes"])),
+                    }
+                )
+            )
+
+        return merged_candidates
+
+    async def _review_timestamps(
+        self,
+        audio_path: str,
+        metadata: AudioMetadata,
+        segments: List[TranscriptSegment],
+    ) -> tuple[List[TranscriptSegment], bool, List[str]]:
+        """Optionally align timestamps after judging."""
+        if not segments:
+            return segments, False, []
+
+        analysis = analyze_timestamp_quality(segments, metadata.duration)
+        notes = [f"Timestamp review: {analysis['reason']}"]
+        if analysis["recommendation"] != "fix":
+            return segments, False, notes
+
+        try:
+            corrected = await fix_timestamps_with_parakeet(
+                self.deps.transcription,
+                audio_path,
+                segments,
+            )
+            notes.append("Applied Parakeet alignment after judging.")
+            return corrected, True, notes
+        except ImportError as exc:
+            notes.append(f"Skipped Parakeet alignment because NeMo is unavailable: {exc}")
+        except Exception as exc:
+            notes.append(f"Parakeet alignment failed: {exc}")
+
+        return segments, False, notes
+
+    def _build_followup_context(self, segments: List[TranscriptSegment]) -> str:
+        """Build short context from the tail of the judged transcript."""
+        context_segments = segments[-5:] if len(segments) > 5 else segments
+        return "\n".join(f"{segment.speaker}: {segment.text}" for segment in context_segments)
 
     async def _transcribe_direct(
         self,
@@ -277,7 +593,7 @@ class TranscriptionWorkflow:
         custom_prompt: Optional[str],
         speaker_names: Optional[List[str]] = None,
     ) -> List[TranscriptSegment]:
-        """Direct transcription pipeline (legacy mode, no orchestrator)"""
+        """Direct transcription pipeline (legacy mode, no judge)"""
 
         # Step 3: Transcribe (with chunking if needed)
         if metadata.needs_chunking:

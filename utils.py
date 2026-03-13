@@ -49,6 +49,38 @@ def estimate_audio_tokens(duration_seconds: float) -> int:
     return int(duration_seconds * 32)
 
 
+def estimate_transcript_tokens(duration_seconds: float) -> int:
+    """
+    Estimate transcript text tokens from audio duration.
+
+    Roughly 150 words per minute, about 200 tokens per minute.
+    """
+    return int((duration_seconds / 60) * 200)
+
+
+def _estimate_model_token_cost(
+    input_tokens: int,
+    output_tokens: int,
+    model_name: str = "gemini-3-flash-preview",
+) -> float:
+    """Estimate model cost from explicit token counts."""
+    if "flash" in model_name.lower():
+        input_cost = (input_tokens / 1_000_000) * PRICING["flash"]["input"]
+        output_cost = (output_tokens / 1_000_000) * PRICING["flash"]["output"]
+    else:
+        threshold = PRICING["pro_tier_threshold"]
+        if max(input_tokens, output_tokens) > threshold:
+            input_rate = PRICING["pro"]["input_high"]
+            output_rate = PRICING["pro"]["output_high"]
+        else:
+            input_rate = PRICING["pro"]["input_low"]
+            output_rate = PRICING["pro"]["output_low"]
+        input_cost = (input_tokens / 1_000_000) * input_rate
+        output_cost = (output_tokens / 1_000_000) * output_rate
+
+    return input_cost + output_cost
+
+
 def estimate_transcription_cost(
     duration_seconds: float, model_name: str = "gemini-3-flash-preview"
 ) -> Tuple[float, str]:
@@ -66,28 +98,60 @@ def estimate_transcription_cost(
 
     # Estimate tokens
     input_tokens = estimate_audio_tokens(duration_seconds)
-    # Estimate output tokens (roughly 150 words per minute, ~200 tokens)
-    output_tokens = int((duration_seconds / 60) * 200)
-
-    # Calculate costs based on model
-    if "flash" in model_name.lower():
-        input_cost = (input_tokens / 1_000_000) * PRICING["flash"]["input"]
-        output_cost = (output_tokens / 1_000_000) * PRICING["flash"]["output"]
-    else:  # Pro model
-        # Apply tiered pricing for Gemini 3 Pro
-        threshold = PRICING["pro_tier_threshold"]
-        if max(input_tokens, output_tokens) > threshold:
-            input_rate = PRICING["pro"]["input_high"]
-            output_rate = PRICING["pro"]["output_high"]
-        else:
-            input_rate = PRICING["pro"]["input_low"]
-            output_rate = PRICING["pro"]["output_low"]
-        input_cost = (input_tokens / 1_000_000) * input_rate
-        output_cost = (output_tokens / 1_000_000) * output_rate
-
-    total_cost = input_cost + output_cost
+    output_tokens = estimate_transcript_tokens(duration_seconds)
+    total_cost = _estimate_model_token_cost(input_tokens, output_tokens, model_name)
 
     # Format cost string
+    if total_cost < 0.01:
+        cost_str = "<$0.01"
+    else:
+        cost_str = f"${total_cost:.2f}"
+
+    return total_cost, cost_str
+
+
+def estimate_judge_pipeline_cost(
+    duration_seconds: float,
+    model_name: str = "gemini-3-flash-preview",
+    candidate_strategy: str = "dual_gemini",
+    use_judge_pipeline: bool = True,
+    judge_model_name: str = "gemini-3.1-pro-preview",
+) -> Tuple[float, str]:
+    """
+    Estimate total Gemini API cost for the visible pipeline choice.
+
+    Notes:
+    - Parakeet is treated as a local model with no Gemini API cost.
+    - Judge cost is approximated from transcript text tokens, not audio tokens.
+    """
+    if not use_judge_pipeline:
+        return estimate_transcription_cost(duration_seconds, model_name)
+
+    total_cost, _ = estimate_transcription_cost(duration_seconds, model_name)
+    transcript_tokens = estimate_transcript_tokens(duration_seconds)
+
+    if candidate_strategy == "dual_gemini":
+        secondary_model = (
+            "gemini-3.1-pro-preview"
+            if model_name != "gemini-3.1-pro-preview"
+            else "gemini-3-flash-preview"
+        )
+        secondary_cost, _ = estimate_transcription_cost(duration_seconds, secondary_model)
+        total_cost += secondary_cost
+        judge_candidate_count = 2
+    elif candidate_strategy == "gemini_plus_parakeet":
+        judge_candidate_count = 2
+    else:
+        judge_candidate_count = 1
+
+    judge_input_tokens = (transcript_tokens * judge_candidate_count) + 800
+    judge_output_tokens = transcript_tokens
+    total_cost += _estimate_model_token_cost(
+        judge_input_tokens,
+        judge_output_tokens,
+        judge_model_name,
+    )
+
     if total_cost < 0.01:
         cost_str = "<$0.01"
     else:

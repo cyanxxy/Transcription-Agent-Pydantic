@@ -3,11 +3,14 @@
 
 # Core dependencies
 streamlit>=1.38.0
-pydantic-ai>=1.0.0
+pydantic-ai>=1.67.0,<2
 pydantic>=2.5.0
+google-genai>=1.67.0,<2
 
 # Audio processing
 pydub==0.25.1
+# Python 3.13+ compatibility shim for pydub's removed stdlib audioop dependency
+audioop-lts>=0.2.2; python_version >= "3.13"
 python-multipart>=0.0.6
 aiofiles>=23.2.1
 nest-asyncio>=1.5.6
@@ -15,11 +18,12 @@ nest-asyncio>=1.5.6
 # Data processing
 protobuf>=4.25.0
 
-# ============================================================
-# OPTIONAL: Timestamp correction with NVIDIA Parakeet + NeMo
-# ============================================================
-# These packages are NOT required for basic transcription.
-# Install separately if you want accurate timestamps:
+# ================================================================
+# OPTIONAL: Parakeet support for candidate generation and alignment
+# ================================================================
+# These packages are NOT required for Gemini-only transcription.
+# Install separately if you want Parakeet as a transcript candidate
+# or for post-judge timestamp alignment:
 #
 #   pip install nemo_toolkit[asr] torch torchaudio
 #
@@ -27,6 +31,6 @@ protobuf>=4.25.0
 # - ~3GB disk space for models
 # - CUDA GPU recommended (works on CPU but slower)
 #
-# The agent will gracefully skip timestamp correction if
-# NeMo is not installed.
-# ============================================================
+# The app will gracefully skip Parakeet features if NeMo is not
+# installed.
+# ================================================================

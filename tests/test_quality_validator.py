@@ -1,5 +1,3 @@
-import pytest
-
 from models import TranscriptSegment
 from dependencies import QualityDeps
 from agents.quality_validator import (

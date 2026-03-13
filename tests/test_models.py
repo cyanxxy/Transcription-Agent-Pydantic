@@ -1,11 +1,12 @@
 import pytest
-from datetime import datetime, timezone
 
 from models import (
     TranscriptSegment,
     AudioMetadata,
     AudioFormat,
+    TranscriptCandidate,
     TranscriptQuality,
+    JudgeDecision,
     TranscriptResult,
     EditOperation,
     TranscriptContext,
@@ -203,6 +204,26 @@ def test_quality_poor() -> None:
 # --- TranscriptResult ---
 
 
+def test_transcript_candidate_defaults() -> None:
+    seg = TranscriptSegment(timestamp="[00:00:00]", speaker="Alice", text="Hello")
+    candidate = TranscriptCandidate(
+        candidate_id="gemini_flash",
+        label="Gemini Flash",
+        kind="gemini",
+        model_name="gemini-3-flash-preview",
+        segments=[seg],
+    )
+    assert candidate.quality_score is None
+    assert candidate.notes == []
+
+
+def test_judge_decision_defaults() -> None:
+    decision = JudgeDecision()
+    assert decision.segments == []
+    assert decision.selected_candidate_ids == []
+    assert decision.processing_notes == []
+
+
 def test_result_created_at_has_timezone() -> None:
     seg = TranscriptSegment(
         timestamp="[00:00:00]", speaker="Alice", text="Hello"
@@ -356,6 +377,46 @@ def test_result_get_speaker_segments() -> None:
     assert len(alice_segs) == 2
 
 
+def test_result_stores_judge_metadata() -> None:
+    seg = TranscriptSegment(timestamp="[00:00:00]", speaker="Alice", text="Hello")
+    meta = AudioMetadata(
+        filename="test.mp3", duration=10, size_mb=1, format=AudioFormat.MP3
+    )
+    quality = TranscriptQuality(
+        overall_score=80,
+        readability=80,
+        punctuation_density=0.05,
+        sentence_variety=70,
+        vocabulary_richness=75,
+    )
+    candidate = TranscriptCandidate(
+        candidate_id="gemini_flash",
+        label="Gemini Flash",
+        kind="gemini",
+        model_name="gemini-3-flash-preview",
+        segments=[seg],
+        quality_score=75,
+    )
+    result = TranscriptResult(
+        segments=[seg],
+        metadata=meta,
+        quality=quality,
+        processing_time=1.0,
+        model_used="gemini-3-flash-preview",
+        candidate_strategy="dual_gemini",
+        candidates=[candidate],
+        judge_used=True,
+        judge_model_used="gemini-3.1-pro-preview",
+        judge_selected_candidate_ids=["gemini_flash"],
+        judge_notes=["Judge selected gemini_flash"],
+    )
+    assert result.judge_used is True
+    assert result.judge_model_used == "gemini-3.1-pro-preview"
+    assert result.judge_selected_candidate_ids == ["gemini_flash"]
+    assert result.candidates[0].candidate_id == "gemini_flash"
+    assert result.judge_notes == ["Judge selected gemini_flash"]
+
+
 # --- EditOperation ---
 
 
@@ -394,3 +455,36 @@ def test_app_state_reset() -> None:
     assert state.status == ProcessingStatus.IDLE
     assert state.current_file is None
     assert state.processing_progress == 0.0
+
+
+def test_app_state_defaults_include_pipeline_config() -> None:
+    state = AppState()
+    assert state.model_name == "gemini-3-flash-preview"
+    assert state.judge_model_name == "gemini-3.1-pro-preview"
+    assert state.candidate_strategy == "dual_gemini"
+    assert state.use_judge_pipeline is True
+    assert state.auto_format is True
+    assert state.remove_fillers is False
+
+
+def test_app_state_reset_preserves_pipeline_config() -> None:
+    state = AppState(
+        model_name="gemini-3.1-pro-preview",
+        judge_model_name="gemini-3-flash-preview",
+        candidate_strategy="single_gemini",
+        use_judge_pipeline=False,
+        auto_format=False,
+        remove_fillers=True,
+    )
+    state.status = ProcessingStatus.ERROR
+    state.current_file = "test.mp3"
+    state.processing_progress = 0.9
+
+    state.reset()
+
+    assert state.model_name == "gemini-3.1-pro-preview"
+    assert state.judge_model_name == "gemini-3-flash-preview"
+    assert state.candidate_strategy == "single_gemini"
+    assert state.use_judge_pipeline is False
+    assert state.auto_format is False
+    assert state.remove_fillers is True

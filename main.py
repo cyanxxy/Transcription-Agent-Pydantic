@@ -25,16 +25,45 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _format_strategy_label(strategy: str) -> str:
+    """Human-readable strategy label."""
+    labels = {
+        "single_gemini": "Single Gemini + Judge",
+        "dual_gemini": "Dual Gemini + Judge",
+        "gemini_plus_parakeet": "Gemini + Parakeet + Judge",
+    }
+    return labels.get(strategy, strategy.replace("_", " ").title())
+
+
+def _format_timing_status(result) -> str:
+    """Summarize timing status for the result header."""
+    if result.timestamps_corrected:
+        return "Aligned"
+    if result.judge_used:
+        return "As Judged"
+    return "Direct"
+
+
 def _get_workflow(**kwargs) -> TranscriptionWorkflow:
     """Get or create a cached TranscriptionWorkflow from session state"""
     api_key = StateManager.get_api_key()
     model_name = StateManager.get_model_name()
-    auto_format = st.session_state.get("auto_format", True)
-    remove_fillers = st.session_state.get("remove_fillers", False)
-    use_orchestrator = st.session_state.get("use_orchestrator", True)
+    judge_model_name = StateManager.get_judge_model_name()
+    candidate_strategy = StateManager.get_candidate_strategy()
+    auto_format = StateManager.get_auto_format()
+    remove_fillers = StateManager.get_remove_fillers()
+    use_judge_pipeline = StateManager.get_use_judge_pipeline()
 
     # Build a cache key from current settings
-    cache_key = (api_key, model_name, auto_format, remove_fillers, use_orchestrator)
+    cache_key = (
+        api_key,
+        model_name,
+        judge_model_name,
+        candidate_strategy,
+        auto_format,
+        remove_fillers,
+        use_judge_pipeline,
+    )
 
     # Reuse cached workflow if settings haven't changed
     if (
@@ -46,9 +75,11 @@ def _get_workflow(**kwargs) -> TranscriptionWorkflow:
     workflow = TranscriptionWorkflow(
         api_key=api_key,
         model_name=model_name,
+        judge_model_name=judge_model_name,
+        candidate_strategy=candidate_strategy,
         auto_format=auto_format,
         remove_fillers=remove_fillers,
-        use_orchestrator=use_orchestrator,
+        use_judge_pipeline=use_judge_pipeline,
         **kwargs,
     )
     st.session_state.workflow = workflow
@@ -107,7 +138,7 @@ async def handle_transcription(workflow: TranscriptionWorkflow, file):
             status_text.empty()
 
             # Show success metrics
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
                 st.metric("Quality Score", f"{result.quality.overall_score:.1f}/100")
             with col2:
@@ -115,10 +146,9 @@ async def handle_transcription(workflow: TranscriptionWorkflow, file):
             with col3:
                 st.metric("Segments", len(result.segments))
             with col4:
-                st.metric(
-                    "Timestamps",
-                    "Corrected" if result.timestamps_corrected else "Gemini",
-                )
+                st.metric("Candidates", len(result.candidates) or 1)
+            with col5:
+                st.metric("Timing", _format_timing_status(result))
 
             st.success("✅ Transcription complete!")
 
@@ -139,7 +169,7 @@ def render_sidebar():
         # Model Selection - Gemini 3 only
         model_options = {
             "Flash (Fast)": "gemini-3-flash-preview",
-            "Pro (Quality)": "gemini-3-pro-preview",
+            "3.1 Pro (Quality)": "gemini-3.1-pro-preview",
         }
 
         current_model = StateManager.get_model_name()
@@ -161,26 +191,64 @@ def render_sidebar():
         st.markdown("**Options**")
         col1, col2 = st.columns(2)
         with col1:
-            auto_format = st.checkbox("Auto-format", value=True, key="auto_fmt")
+            auto_format = st.checkbox(
+                "Auto-format",
+                value=StateManager.get_auto_format(),
+                key="auto_fmt",
+            )
         with col2:
-            remove_fillers = st.checkbox("No fillers", value=False, key="no_fill")
+            remove_fillers = st.checkbox(
+                "No fillers",
+                value=StateManager.get_remove_fillers(),
+                key="no_fill",
+            )
 
         st.session_state.auto_format = auto_format
         st.session_state.remove_fillers = remove_fillers
+        StateManager.set_auto_format(auto_format)
+        StateManager.set_remove_fillers(remove_fillers)
 
-        # Orchestrator Options
+        # Judge Pipeline Options
         st.markdown("**Advanced**")
-        use_orchestrator = st.checkbox(
-            "🤖 Agentic Mode",
-            value=True,
-            key="use_orch",
-            help="AI agent autonomously decides workflow (recommended)",
+        use_judge_pipeline = st.checkbox(
+            "Use Judge Pipeline",
+            value=StateManager.get_use_judge_pipeline(),
+            key="use_judge_pipeline_toggle",
+            help="Generate transcript candidates first, then use a judge agent to pick or merge the final transcript.",
         )
 
-        st.session_state.use_orchestrator = use_orchestrator
+        st.session_state.use_judge_pipeline = use_judge_pipeline
+        StateManager.set_use_judge_pipeline(use_judge_pipeline)
 
-        if use_orchestrator:
-            st.caption("Agent will analyze and decide if timestamps need correction")
+        if use_judge_pipeline:
+            strategy_options = {
+                "Single Gemini + Judge": "single_gemini",
+                "Dual Gemini + Judge": "dual_gemini",
+                "Gemini + Parakeet + Judge": "gemini_plus_parakeet",
+            }
+            current_strategy = StateManager.get_candidate_strategy()
+            strategy_values = list(strategy_options.values())
+            if current_strategy not in strategy_values:
+                current_strategy = "dual_gemini"
+                StateManager.set_candidate_strategy(current_strategy)
+                st.session_state.candidate_strategy = current_strategy
+
+            selected_strategy = st.selectbox(
+                "Candidate Strategy",
+                options=list(strategy_options.keys()),
+                index=strategy_values.index(current_strategy),
+                help="Primary model comes from the Model selector above. Dual Gemini adds the other Gemini model. Gemini + Parakeet uses Parakeet as the second transcript candidate.",
+            )
+            selected_strategy_value = strategy_options[selected_strategy]
+            st.session_state.candidate_strategy = selected_strategy_value
+            StateManager.set_candidate_strategy(selected_strategy_value)
+            st.caption(
+                "Judge agent runs on Gemini 3.1 Pro by default and can still align timestamps after judging."
+            )
+        else:
+            st.session_state.candidate_strategy = "single_gemini"
+            StateManager.set_candidate_strategy("single_gemini")
+            st.caption("Legacy direct single-model transcription")
 
         # Context Section
         st.markdown("---")
@@ -244,7 +312,7 @@ def render_sidebar():
         # Footer - Minimal
         st.markdown("---")
         st.caption(
-            "v2.1 (Orchestrator) | [Docs](https://github.com) | [API Key](https://makersuite.google.com)"
+            "v2.1 (Judge Pipeline) | [Docs](https://github.com) | [API Key](https://makersuite.google.com)"
         )
 
 
@@ -265,6 +333,47 @@ def render_transcript_display():
     with tab1:
         # Display transcript
         st.subheader("Transcript")
+
+        if result.judge_used:
+            st.info(
+                "Judge pipeline: "
+                f"{_format_strategy_label(result.candidate_strategy)} | "
+                f"{len(result.candidates)} candidates | "
+                f"judge model: {result.judge_model_used}"
+            )
+
+            if result.judge_selected_candidate_ids:
+                st.caption(
+                    "Selected candidates: "
+                    + ", ".join(result.judge_selected_candidate_ids)
+                )
+
+            if result.judge_notes:
+                with st.expander("Judge Notes"):
+                    for note in result.judge_notes:
+                        st.markdown(f"- {note}")
+
+            if result.candidates:
+                with st.expander("Candidate Summaries"):
+                    for candidate in result.candidates:
+                        quality_text = (
+                            f"{candidate.quality_score:.1f}/100"
+                            if candidate.quality_score is not None
+                            else "n/a"
+                        )
+                        selected_suffix = (
+                            " selected"
+                            if candidate.candidate_id in result.judge_selected_candidate_ids
+                            else ""
+                        )
+                        st.markdown(
+                            f"**{candidate.label}** "
+                            f"({candidate.kind}, quality {quality_text}{selected_suffix})"
+                        )
+                        for note in candidate.notes:
+                            st.caption(note)
+        else:
+            st.info("Direct mode: single Gemini transcription without judge arbitration")
 
         # Show speakers
         speakers = result.unique_speakers
@@ -429,7 +538,7 @@ def main():
     col1, col2 = st.columns([10, 1])
     with col1:
         st.title("ExactTranscriber")
-        st.caption("Audio transcription with Gemini 3 + Parakeet timestamps")
+        st.caption("Multi-agent transcription with candidate models, a judge agent, and Parakeet alignment")
     with col2:
         if state.transcript_result and st.button("New"):
             StateManager.reset_state()
@@ -456,9 +565,9 @@ def main():
 
         if uploaded_file:
             # Display file info
-            from utils import estimate_transcription_cost
+            from utils import estimate_judge_pipeline_cost
 
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
                 st.metric("File", uploaded_file.name)
             with col2:
@@ -468,12 +577,25 @@ def main():
                 file_type = Path(uploaded_file.name).suffix.lstrip(".")
                 st.metric("Format", file_type.upper())
             with col4:
+                use_judge_pipeline = StateManager.get_use_judge_pipeline()
+                candidate_strategy = StateManager.get_candidate_strategy()
+                pipeline_label = (
+                    _format_strategy_label(candidate_strategy)
+                    if use_judge_pipeline
+                    else "Direct Gemini"
+                )
+                st.metric("Pipeline", pipeline_label)
+            with col5:
                 # Estimate cost (rough estimate based on file size)
                 estimated_duration = size_mb * 60  # Rough: 1MB ≈ 1 minute for MP3
-                _, cost_str = estimate_transcription_cost(
-                    estimated_duration, StateManager.get_model_name()
+                _, cost_str = estimate_judge_pipeline_cost(
+                    estimated_duration,
+                    StateManager.get_model_name(),
+                    StateManager.get_candidate_strategy(),
+                    StateManager.get_use_judge_pipeline(),
+                    StateManager.get_judge_model_name(),
                 )
-                st.metric("Est. Cost", cost_str)
+                st.metric("Est. API Cost", cost_str)
 
             # Show active context if any
             if hasattr(st.session_state, "user_context"):
@@ -493,8 +615,7 @@ def main():
             if st.button(
                 "🚀 Start Transcription", type="primary", use_container_width=True
             ):
-                # Initialize workflow with options (cached)
-                # Note: In agentic mode, the agent decides autonomously about timestamps
+                # Initialize workflow with the current pipeline configuration.
                 workflow = _get_workflow()
 
                 # Run transcription with proper event loop handling

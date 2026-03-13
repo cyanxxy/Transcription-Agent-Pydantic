@@ -152,6 +152,61 @@ class StateManager:
         """Set model name"""
         StateManager.update_state(model_name=model_name)
 
+    @staticmethod
+    def get_judge_model_name() -> str:
+        """Get configured judge model name"""
+        state = StateManager.get_state()
+        return state.judge_model_name
+
+    @staticmethod
+    def set_judge_model_name(model_name: str) -> None:
+        """Set judge model name"""
+        StateManager.update_state(judge_model_name=model_name)
+
+    @staticmethod
+    def get_candidate_strategy() -> str:
+        """Get candidate generation strategy"""
+        state = StateManager.get_state()
+        return state.candidate_strategy
+
+    @staticmethod
+    def set_candidate_strategy(candidate_strategy: str) -> None:
+        """Set candidate generation strategy"""
+        StateManager.update_state(candidate_strategy=candidate_strategy)
+
+    @staticmethod
+    def get_use_judge_pipeline() -> bool:
+        """Get whether the judge pipeline is enabled"""
+        state = StateManager.get_state()
+        return state.use_judge_pipeline
+
+    @staticmethod
+    def set_use_judge_pipeline(enabled: bool) -> None:
+        """Enable or disable the judge pipeline"""
+        StateManager.update_state(use_judge_pipeline=enabled)
+
+    @staticmethod
+    def get_auto_format() -> bool:
+        """Get auto-format setting"""
+        state = StateManager.get_state()
+        return state.auto_format
+
+    @staticmethod
+    def set_auto_format(enabled: bool) -> None:
+        """Set auto-format setting"""
+        StateManager.update_state(auto_format=enabled)
+
+    @staticmethod
+    def get_remove_fillers() -> bool:
+        """Get filler removal setting"""
+        state = StateManager.get_state()
+        return state.remove_fillers
+
+    @staticmethod
+    def set_remove_fillers(enabled: bool) -> None:
+        """Set filler removal setting"""
+        StateManager.update_state(remove_fillers=enabled)
+
 
 # Convenience functions for backward compatibility
 
