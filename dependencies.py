@@ -98,10 +98,7 @@ class TranscriptionDeps:
                 f"Allowed: {sorted(FLASH_THINKING_LEVELS)}"
             )
 
-        if (
-            "-pro" in self.model_name
-            and self.thinking_level not in PRO_THINKING_LEVELS
-        ):
+        if "-pro" in self.model_name and self.thinking_level not in PRO_THINKING_LEVELS:
             raise ValueError(
                 f"thinking_level '{self.thinking_level}' is not supported by {self.model_name}. "
                 f"Allowed: {sorted(PRO_THINKING_LEVELS)}"
@@ -356,9 +353,7 @@ class AppDeps:
 
         # Get other settings from session state
         model_name = _session_value("model_name", "gemini-3-flash-preview")
-        judge_model_name = _session_value(
-            "judge_model_name", "gemini-3.1-pro-preview"
-        )
+        judge_model_name = _session_value("judge_model_name", "gemini-3.1-pro-preview")
         candidate_strategy = _session_value("candidate_strategy", "dual_gemini")
         auto_format = _session_value("auto_format", True)
         remove_fillers = _session_value("remove_fillers", False)

@@ -3,12 +3,12 @@ Utility functions for ExactTranscriber v2.0
 """
 
 import asyncio
-from typing import Any, Coroutine, Tuple, TypeVar
+from typing import Any, Coroutine, Dict, Tuple, TypeVar
 
 T = TypeVar("T")
 
 # Gemini 3 pricing per 1M tokens (update when Google changes pricing)
-PRICING = {
+PRICING: Dict[str, Any] = {
     "flash": {"input": 0.50, "output": 3.00},
     "pro": {
         "input_low": 2.00,
@@ -136,7 +136,9 @@ def estimate_judge_pipeline_cost(
             if model_name != "gemini-3.1-pro-preview"
             else "gemini-3-flash-preview"
         )
-        secondary_cost, _ = estimate_transcription_cost(duration_seconds, secondary_model)
+        secondary_cost, _ = estimate_transcription_cost(
+            duration_seconds, secondary_model
+        )
         total_cost += secondary_cost
         judge_candidate_count = 2
     elif candidate_strategy == "gemini_plus_parakeet":

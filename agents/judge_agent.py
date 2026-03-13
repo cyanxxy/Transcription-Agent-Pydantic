@@ -20,7 +20,7 @@ from models import JudgeDecision, TranscriptCandidate
 logger = logging.getLogger(__name__)
 
 
-def create_judge_agent(deps: AppDeps) -> Agent:
+def create_judge_agent(deps: AppDeps) -> Agent[AppDeps, JudgeDecision]:
     """Create the transcript judge agent."""
     model = GoogleModel(
         deps.transcription.judge_model_name,
@@ -125,7 +125,7 @@ async def run_judge_agent(
     context_prompt: Optional[str] = None,
     speaker_names: Optional[List[str]] = None,
     chunk_label: str = "the current audio span",
-    agent: Optional[Agent] = None,
+    agent: Optional[Agent[AppDeps, JudgeDecision]] = None,
 ) -> JudgeDecision:
     """Run the judge agent over one or more transcript candidates."""
     if not candidates:
@@ -142,7 +142,7 @@ async def run_judge_agent(
     model_settings = GoogleModelSettings(
         temperature=1.0,
         max_tokens=deps.transcription.max_output_tokens,
-        google_thinking_config={
+        google_thinking_config={  # type: ignore[typeddict-unknown-key]
             "thinking_level": deps.transcription.thinking_level,
         },
     )

@@ -150,7 +150,7 @@ def calculate_speaker_consistency(segments: List[TranscriptSegment]) -> float:
         return 0.0
 
     # Count unique speakers and their frequency
-    speaker_counts = {}
+    speaker_counts: Dict[str, int] = {}
     for seg in segments:
         speaker = seg.speaker.strip()
         speaker_counts[speaker] = speaker_counts.get(speaker, 0) + 1

@@ -7,13 +7,15 @@ Supports two modes:
 2. Direct Pipeline: Manual single-model transcription without judging
 """
 
-from typing import Optional, Callable, List, Dict, Any
+from typing import Optional, Callable, List, Dict, Any, Literal, cast
 from dataclasses import dataclass, replace
 import asyncio
 import logging
 from datetime import datetime
 
+from pydantic_ai import Agent
 from models import (
+    JudgeDecision,
     TranscriptResult,
     TranscriptSegment,
     TranscriptCandidate,
@@ -67,15 +69,15 @@ class TranscriptionWorkflow:
 
         # Create agents once and reuse (avoids repeated GoogleProvider creation)
         self.transcription_agent = create_transcription_agent(self.deps.transcription)
-        self._judge_agent = None
+        self._judge_agent: Optional[Agent[AppDeps, JudgeDecision]] = None
 
         # Track processing state
         self.current_status = ProcessingStatus.IDLE
-        self.current_file = None
-        self.processing_start = None
+        self.current_file: Optional[str] = None
+        self.processing_start: Optional[datetime] = None
 
     @property
-    def judge_agent(self):
+    def judge_agent(self) -> Agent[AppDeps, JudgeDecision]:
         """Lazily create and cache the judge agent."""
         if self._judge_agent is None:
             self._judge_agent = create_judge_agent(self.deps)
@@ -116,7 +118,7 @@ class TranscriptionWorkflow:
             if progress_callback:
                 progress_callback("Processing audio...", 0.2)
 
-            temp_path = validation.get("temp_path")
+            temp_path: str = validation["temp_path"]
             metadata = await process_audio_file(self.deps.transcription, temp_path)
 
             # Step 2.5: Process user context if provided
@@ -187,6 +189,7 @@ class TranscriptionWorkflow:
                 timestamps_corrected = False  # Direct mode doesn't use Parakeet
 
             # Step 6: Create final result
+            assert self.processing_start is not None
             processing_time = (datetime.now() - self.processing_start).total_seconds()
 
             result = TranscriptResult(
@@ -505,7 +508,7 @@ class TranscriptionWorkflow:
         return TranscriptCandidate(
             candidate_id=spec["candidate_id"],
             label=spec["label"],
-            kind=spec["kind"],
+            kind=cast(Literal["gemini", "parakeet"], spec["kind"]),
             model_name=spec["model_name"],
             segments=segments,
             quality_score=quality_score,
@@ -531,7 +534,9 @@ class TranscriptionWorkflow:
                 merged_segments = await merge_chunks(self.deps.transcription, chunks)
 
             if speaker_names and merged_segments:
-                merged_segments = map_speakers_to_context(merged_segments, speaker_names)
+                merged_segments = map_speakers_to_context(
+                    merged_segments, speaker_names
+                )
 
             quality_score = None
             if merged_segments:
@@ -574,7 +579,9 @@ class TranscriptionWorkflow:
             notes.append("Applied Parakeet alignment after judging.")
             return corrected, True, notes
         except ImportError as exc:
-            notes.append(f"Skipped Parakeet alignment because NeMo is unavailable: {exc}")
+            notes.append(
+                f"Skipped Parakeet alignment because NeMo is unavailable: {exc}"
+            )
         except Exception as exc:
             notes.append(f"Parakeet alignment failed: {exc}")
 
@@ -583,7 +590,9 @@ class TranscriptionWorkflow:
     def _build_followup_context(self, segments: List[TranscriptSegment]) -> str:
         """Build short context from the tail of the judged transcript."""
         context_segments = segments[-5:] if len(segments) > 5 else segments
-        return "\n".join(f"{segment.speaker}: {segment.text}" for segment in context_segments)
+        return "\n".join(
+            f"{segment.speaker}: {segment.text}" for segment in context_segments
+        )
 
     async def _transcribe_direct(
         self,
@@ -704,7 +713,7 @@ class TranscriptionWorkflow:
         overall_score = calculate_overall_score(self.deps.quality, metrics)
 
         # Detect issues - simplified for now
-        issues = []
+        issues: List[Dict[str, Any]] = []
 
         return TranscriptQuality(
             overall_score=overall_score,
@@ -830,8 +839,8 @@ class TranscriptionWorkflow:
             if len(text) > max_line_length:
                 # Split into lines
                 words = text.split()
-                lines = []
-                current_line = []
+                lines: List[str] = []
+                current_line: List[str] = []
 
                 for word in words:
                     if len(" ".join(current_line + [word])) <= max_line_length:

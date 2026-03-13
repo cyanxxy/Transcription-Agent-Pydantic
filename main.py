@@ -3,10 +3,12 @@ ExactTranscriber v2.0 - Main Application
 Powered by Pydantic AI for robust transcription workflows
 """
 
-import streamlit as st
+import html as html_mod
 import logging
 from pathlib import Path
+
 import nest_asyncio
+import streamlit as st
 
 # Allow nested event loops for Streamlit
 nest_asyncio.apply()
@@ -23,6 +25,11 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────
+#  Helpers
+# ──────────────────────────────────────
 
 
 def _format_strategy_label(strategy: str) -> str:
@@ -44,9 +51,14 @@ def _format_timing_status(result) -> str:
     return "Direct"
 
 
+def _esc(text: str) -> str:
+    """HTML-escape user content."""
+    return html_mod.escape(str(text))
+
+
 def _get_workflow(**kwargs) -> TranscriptionWorkflow:
-    """Get or create a cached TranscriptionWorkflow from session state"""
-    api_key = StateManager.get_api_key()
+    """Get or create a cached TranscriptionWorkflow from session state."""
+    api_key = StateManager.get_api_key() or ""
     model_name = StateManager.get_model_name()
     judge_model_name = StateManager.get_judge_model_name()
     candidate_strategy = StateManager.get_candidate_strategy()
@@ -54,7 +66,6 @@ def _get_workflow(**kwargs) -> TranscriptionWorkflow:
     remove_fillers = StateManager.get_remove_fillers()
     use_judge_pipeline = StateManager.get_use_judge_pipeline()
 
-    # Build a cache key from current settings
     cache_key = (
         api_key,
         model_name,
@@ -65,7 +76,6 @@ def _get_workflow(**kwargs) -> TranscriptionWorkflow:
         use_judge_pipeline,
     )
 
-    # Reuse cached workflow if settings haven't changed
     if (
         "workflow" in st.session_state
         and st.session_state.get("workflow_cache_key") == cache_key
@@ -87,8 +97,196 @@ def _get_workflow(**kwargs) -> TranscriptionWorkflow:
     return workflow
 
 
+# ──────────────────────────────────────
+#  Custom HTML Renderers
+# ──────────────────────────────────────
+
+
+def _render_header():
+    """Render the branded app header."""
+    st.markdown(
+        """
+        <div class="app-header">
+            <div class="app-badge">v2.1 &middot; Judge Pipeline</div>
+            <div class="app-title">Exact<span>Transcriber</span></div>
+            <div class="app-subtitle">
+                Multi-agent transcription with candidate models, judge arbitration, and Parakeet alignment
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_info_grid(items):
+    """Render a grid of info cards. items: list of (label, value, is_accent)."""
+    cards = []
+    for label, value, accent in items:
+        cls = " accent" if accent else ""
+        cards.append(
+            f'<div class="info-card">'
+            f'<div class="info-label">{_esc(label)}</div>'
+            f'<div class="info-value{cls}">{_esc(str(value))}</div>'
+            f"</div>"
+        )
+    st.markdown(
+        f'<div class="info-grid">{"".join(cards)}</div>', unsafe_allow_html=True
+    )
+
+
+def _render_context_badges(ctx):
+    """Render context as inline badges."""
+    parts = []
+    if ctx.get("topic"):
+        parts.append(f'<span class="ctx-badge">Topic: {_esc(ctx["topic"])}</span>')
+    if ctx.get("speakers"):
+        names = ", ".join(_esc(s) for s in ctx["speakers"])
+        parts.append(f'<span class="ctx-badge">Speakers: {names}</span>')
+    if ctx.get("format"):
+        parts.append(f'<span class="ctx-badge">Format: {_esc(ctx["format"])}</span>')
+    if ctx.get("terms"):
+        count = len(ctx["terms"])
+        parts.append(f'<span class="ctx-badge">{count} term(s)</span>')
+    if parts:
+        st.markdown(
+            f'<div class="ctx-badges">{"".join(parts)}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def _render_result_strip(result):
+    """Render a compact summary strip for the completed result."""
+
+    def _stat(value, label, accent=False):
+        cls = " accent" if accent else ""
+        return (
+            f'<div class="result-stat">'
+            f'<div class="stat-value{cls}">{_esc(str(value))}</div>'
+            f'<div class="stat-label">{_esc(label)}</div>'
+            f"</div>"
+        )
+
+    sep = '<div class="result-sep"></div>'
+    parts = [
+        _stat(f"{result.quality.overall_score:.0f}/100", "Quality", accent=True),
+        sep,
+        _stat(f"{result.processing_time:.1f}s", "Time"),
+        sep,
+        _stat(str(len(result.segments)), "Segments"),
+        sep,
+        _stat(str(len(result.candidates) or 1), "Candidates"),
+        sep,
+        _stat(_format_timing_status(result), "Timing"),
+    ]
+    st.markdown(
+        f'<div class="result-strip animate-in">{"".join(parts)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_segments_html(segments):
+    """Render transcript segments as styled HTML."""
+    parts = ['<div class="segment-container">']
+    for seg in segments:
+        parts.append(
+            f'<div class="segment">'
+            f'<div class="segment-time">{_esc(seg.timestamp)}</div>'
+            f'<div class="segment-body">'
+            f'<div class="segment-speaker">{_esc(seg.speaker)}</div>'
+            f'<div class="segment-text">{_esc(seg.text)}</div>'
+            f"</div></div>"
+        )
+    parts.append("</div>")
+    st.markdown("\n".join(parts), unsafe_allow_html=True)
+
+
+def _render_quality_ring(score, assessment):
+    """Render an SVG quality score ring."""
+    import math
+
+    radius = 54
+    circumference = 2 * math.pi * radius
+    progress = max(0, min(score, 100)) / 100
+    offset = circumference * (1 - progress)
+
+    if score >= 80:
+        color, css_cls = "#34d399", "excellent"
+    elif score >= 60:
+        color, css_cls = "#f0a500", "good"
+    elif score >= 40:
+        color, css_cls = "#fbbf24", "fair"
+    else:
+        color, css_cls = "#f87171", "poor"
+
+    st.markdown(
+        f"""
+        <div class="quality-hero">
+            <div class="quality-ring">
+                <svg viewBox="0 0 120 120" width="140" height="140">
+                    <circle cx="60" cy="60" r="{radius}" fill="none"
+                            stroke="rgba(255,255,255,0.06)" stroke-width="8"/>
+                    <circle cx="60" cy="60" r="{radius}" fill="none"
+                            stroke="{color}" stroke-width="8"
+                            stroke-dasharray="{circumference:.1f}"
+                            stroke-dashoffset="{offset:.1f}"
+                            stroke-linecap="round"
+                            transform="rotate(-90 60 60)"
+                            style="transition: stroke-dashoffset 0.8s ease-out;"/>
+                </svg>
+                <div class="inner">
+                    <div class="quality-val">{score:.0f}</div>
+                    <div class="quality-max">/100</div>
+                </div>
+            </div>
+            <div class="quality-assess {css_cls}">{_esc(assessment)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_pipeline_banner(result):
+    """Render judge pipeline info banner."""
+    strategy = _format_strategy_label(result.candidate_strategy)
+    model = _esc(str(result.judge_model_used or "n/a"))
+    n_candidates = len(result.candidates) or 1
+    st.markdown(
+        f'<div class="pipeline-banner">'
+        f"<strong>Judge Pipeline</strong> &mdash; "
+        f"{_esc(strategy)} &middot; "
+        f"{n_candidates} candidate(s) &middot; "
+        f"judge model: {model}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_candidates_html(candidates, selected_ids):
+    """Render candidate summaries as styled HTML."""
+    parts = []
+    for c in candidates:
+        is_sel = c.candidate_id in selected_ids
+        cls = "cand-item selected" if is_sel else "cand-item"
+        quality = f"{c.quality_score:.1f}/100" if c.quality_score is not None else "n/a"
+        sel_tag = " &bull; selected" if is_sel else ""
+        parts.append(
+            f'<div class="{cls}">'
+            f'<div class="cand-label">{_esc(c.label)}</div>'
+            f'<div class="cand-meta">{_esc(c.kind)} &middot; quality {_esc(quality)}{sel_tag}</div>'
+        )
+        for note in c.notes:
+            parts.append(f'<div class="cand-note">{_esc(note)}</div>')
+        parts.append("</div>")
+    st.markdown("\n".join(parts), unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────
+#  Page Setup
+# ──────────────────────────────────────
+
+
 def setup_page():
-    """Configure Streamlit page settings"""
+    """Configure Streamlit page settings."""
     st.set_page_config(
         page_title="ExactTranscriber v2.0",
         page_icon="🎙️",
@@ -98,16 +296,19 @@ def setup_page():
     apply_custom_styles()
 
 
+# ──────────────────────────────────────
+#  Transcription Handler
+# ──────────────────────────────────────
+
+
 async def handle_transcription(workflow: TranscriptionWorkflow, file):
-    """Handle file transcription with new workflow"""
+    """Handle file transcription with new workflow."""
 
     StateManager.set_processing(file.name)
 
     try:
-        # Read file data
         file_data = file.read()
 
-        # Create progress container
         progress_container = st.container()
 
         with progress_container:
@@ -119,10 +320,8 @@ async def handle_transcription(workflow: TranscriptionWorkflow, file):
                 status_text.text(msg)
                 StateManager.update_progress(pct)
 
-            # Get user context if provided
             user_context = st.session_state.get("user_context", None)
 
-            # Run transcription with context
             result = await workflow.transcribe_audio(
                 file_data,
                 file.name,
@@ -130,43 +329,38 @@ async def handle_transcription(workflow: TranscriptionWorkflow, file):
                 user_context=user_context,
             )
 
-            # Update state with result
             StateManager.set_complete(result)
 
-            # Clear progress indicators
             progress_bar.empty()
             status_text.empty()
 
-            # Show success metrics
-            col1, col2, col3, col4, col5 = st.columns(5)
-            with col1:
-                st.metric("Quality Score", f"{result.quality.overall_score:.1f}/100")
-            with col2:
-                st.metric("Processing Time", f"{result.processing_time:.1f}s")
-            with col3:
-                st.metric("Segments", len(result.segments))
-            with col4:
-                st.metric("Candidates", len(result.candidates) or 1)
-            with col5:
-                st.metric("Timing", _format_timing_status(result))
-
-            st.success("✅ Transcription complete!")
-
-            # Force a rerun to show the transcript tabs
+            st.success("Transcription complete!")
             st.rerun()
 
     except Exception as e:
         logger.error(f"Transcription failed: {e}", exc_info=True)
         StateManager.set_error(str(e))
-        st.error(f"❌ Transcription failed: {e}")
+        st.error(f"Transcription failed: {e}")
+
+
+# ──────────────────────────────────────
+#  Sidebar
+# ──────────────────────────────────────
 
 
 def render_sidebar():
-    """Render sidebar with settings"""
+    """Render sidebar with settings."""
     with st.sidebar:
-        st.markdown("### Settings")
+        # Brand
+        st.markdown(
+            '<div class="sidebar-brand">'
+            '<span class="brand-text">Exact<span class="brand-accent">T</span></span>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
-        # Model Selection - Gemini 3 only
+        st.markdown("### Model")
+
         model_options = {
             "Flash (Fast)": "gemini-3-flash-preview",
             "3.1 Pro (Quality)": "gemini-3.1-pro-preview",
@@ -182,13 +376,13 @@ def render_sidebar():
             options=list(model_options.keys()),
             index=model_values.index(current_model),
             horizontal=True,
+            label_visibility="collapsed",
         )
 
         if model_options[selected_model] != current_model:
             StateManager.set_model_name(model_options[selected_model])
 
-        # Processing Options - Compact
-        st.markdown("**Options**")
+        st.markdown("### Options")
         col1, col2 = st.columns(2)
         with col1:
             auto_format = st.checkbox(
@@ -208,8 +402,7 @@ def render_sidebar():
         StateManager.set_auto_format(auto_format)
         StateManager.set_remove_fillers(remove_fillers)
 
-        # Judge Pipeline Options
-        st.markdown("**Advanced**")
+        st.markdown("### Pipeline")
         use_judge_pipeline = st.checkbox(
             "Use Judge Pipeline",
             value=StateManager.get_use_judge_pipeline(),
@@ -237,50 +430,43 @@ def render_sidebar():
                 "Candidate Strategy",
                 options=list(strategy_options.keys()),
                 index=strategy_values.index(current_strategy),
-                help="Primary model comes from the Model selector above. Dual Gemini adds the other Gemini model. Gemini + Parakeet uses Parakeet as the second transcript candidate.",
+                help="Primary model comes from the Model selector above. "
+                "Dual Gemini adds the other Gemini model. "
+                "Gemini + Parakeet uses Parakeet as the second candidate.",
             )
             selected_strategy_value = strategy_options[selected_strategy]
             st.session_state.candidate_strategy = selected_strategy_value
             StateManager.set_candidate_strategy(selected_strategy_value)
-            st.caption(
-                "Judge agent runs on Gemini 3.1 Pro by default and can still align timestamps after judging."
-            )
+            st.caption("Judge agent runs on Gemini 3.1 Pro by default.")
         else:
             st.session_state.candidate_strategy = "single_gemini"
             StateManager.set_candidate_strategy("single_gemini")
-            st.caption("Legacy direct single-model transcription")
+            st.caption("Direct single-model transcription")
 
         # Context Section
         st.markdown("---")
-        st.markdown("**Context (Optional)**")
+        st.markdown("### Context")
 
         with st.expander("Add context for better accuracy"):
-            # Topic/Domain
             topic = st.text_input(
-                "Topic/Domain",
-                placeholder="e.g., Medical, Legal, Tech, Business",
+                "Topic / Domain",
+                placeholder="e.g., Medical, Legal, Tech",
                 key="context_topic",
-                help="Main subject or field of discussion",
             )
 
-            # Speaker names
             speakers = st.text_input(
                 "Speaker Names",
                 placeholder="e.g., John, Sarah, Dr. Smith",
                 key="context_speakers",
-                help="Comma-separated names of speakers",
             )
 
-            # Technical terms
             terms = st.text_area(
                 "Technical Terms",
-                placeholder="e.g., API, microservices, Kubernetes",
+                placeholder="One per line",
                 key="context_terms",
                 height=60,
-                help="Important terms or jargon (one per line)",
             )
 
-            # Format type
             format_type = st.selectbox(
                 "Format Type",
                 options=[
@@ -295,7 +481,6 @@ def render_sidebar():
                 key="context_format",
             )
 
-            # Save context to session state
             st.session_state.user_context = {
                 "topic": topic if topic else None,
                 "speakers": (
@@ -309,15 +494,26 @@ def render_sidebar():
                 "format": format_type.lower() if format_type != "Auto" else None,
             }
 
-        # Footer - Minimal
+        # Footer
         st.markdown("---")
-        st.caption(
-            "v2.1 (Judge Pipeline) | [Docs](https://github.com) | [API Key](https://makersuite.google.com)"
+        st.markdown(
+            '<div style="text-align:center;">'
+            '<span style="font-size:0.68rem;color:var(--text-muted);">'
+            "v2.1 &middot; Judge Pipeline &middot; "
+            '<a href="https://makersuite.google.com" '
+            'style="color:var(--accent);text-decoration:none;">'
+            "API Key</a></span></div>",
+            unsafe_allow_html=True,
         )
 
 
+# ──────────────────────────────────────
+#  Transcript Display
+# ──────────────────────────────────────
+
+
 def render_transcript_display():
-    """Render transcript display and editing interface"""
+    """Render transcript display and editing interface."""
     state = StateManager.get_state()
 
     if not state.transcript_result:
@@ -325,27 +521,16 @@ def render_transcript_display():
 
     result = state.transcript_result
 
-    # Display tabs
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["📝 Transcript", "✏️ Edit", "📊 Quality", "💾 Export"]
-    )
+    tab1, tab2, tab3, tab4 = st.tabs(["Transcript", "Edit", "Quality", "Export"])
 
     with tab1:
-        # Display transcript
-        st.subheader("Transcript")
-
+        # Pipeline info
         if result.judge_used:
-            st.info(
-                "Judge pipeline: "
-                f"{_format_strategy_label(result.candidate_strategy)} | "
-                f"{len(result.candidates)} candidates | "
-                f"judge model: {result.judge_model_used}"
-            )
+            _render_pipeline_banner(result)
 
             if result.judge_selected_candidate_ids:
                 st.caption(
-                    "Selected candidates: "
-                    + ", ".join(result.judge_selected_candidate_ids)
+                    "Selected: " + ", ".join(result.judge_selected_candidate_ids)
                 )
 
             if result.judge_notes:
@@ -355,48 +540,36 @@ def render_transcript_display():
 
             if result.candidates:
                 with st.expander("Candidate Summaries"):
-                    for candidate in result.candidates:
-                        quality_text = (
-                            f"{candidate.quality_score:.1f}/100"
-                            if candidate.quality_score is not None
-                            else "n/a"
-                        )
-                        selected_suffix = (
-                            " selected"
-                            if candidate.candidate_id in result.judge_selected_candidate_ids
-                            else ""
-                        )
-                        st.markdown(
-                            f"**{candidate.label}** "
-                            f"({candidate.kind}, quality {quality_text}{selected_suffix})"
-                        )
-                        for note in candidate.notes:
-                            st.caption(note)
+                    _render_candidates_html(
+                        result.candidates, result.judge_selected_candidate_ids
+                    )
         else:
-            st.info("Direct mode: single Gemini transcription without judge arbitration")
+            st.markdown(
+                '<div class="pipeline-banner">'
+                "<strong>Direct Mode</strong> &mdash; "
+                "single Gemini transcription without judge arbitration"
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
-        # Show speakers
+        # Speaker info
         speakers = result.unique_speakers
         if speakers:
-            st.info(f"Speakers detected: {', '.join(speakers)}")
+            st.caption(f"Speakers: {', '.join(speakers)}")
 
-        # Display segments
-        for segment in result.segments:
-            with st.container():
-                col1, col2 = st.columns([1, 10])
-                with col1:
-                    st.text(segment.timestamp)
-                with col2:
-                    st.markdown(f"**{segment.speaker}:** {segment.text}")
+        # Segments
+        _render_segments_html(result.segments)
 
     with tab2:
-        # Editing tools
-        st.subheader("Editing Tools")
+        st.markdown(
+            '<div class="section-hdr"><span class="dot"></span>Editing Tools</div>',
+            unsafe_allow_html=True,
+        )
 
         col1, col2 = st.columns(2)
 
         with col1:
-            if st.button("🔧 Auto-Format", use_container_width=True):
+            if st.button("Auto-Format", use_container_width=True):
                 with st.spinner("Formatting..."):
                     workflow = _get_workflow()
                     edited_result = run_async(
@@ -406,7 +579,7 @@ def render_transcript_display():
                     st.success("Formatting applied!")
                     st.rerun()
 
-            if st.button("🔤 Fix Capitalization", use_container_width=True):
+            if st.button("Fix Capitalization", use_container_width=True):
                 with st.spinner("Fixing capitalization..."):
                     workflow = _get_workflow()
                     edited_result = run_async(
@@ -418,8 +591,8 @@ def render_transcript_display():
 
         with col2:
             st.markdown("**Find & Replace**")
-            find_text = st.text_input("Find:")
-            replace_text = st.text_input("Replace with:")
+            find_text = st.text_input("Find:", key="edit_find")
+            replace_text = st.text_input("Replace with:", key="edit_replace")
 
             col3, col4 = st.columns(2)
             with col3:
@@ -446,26 +619,11 @@ def render_transcript_display():
                         st.rerun()
 
     with tab3:
-        # Quality metrics
-        st.subheader("Quality Analysis")
-
         quality = result.quality
-
-        st.markdown(
-            f"""
-            <div style='text-align: center; padding: 20px; 
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                        border-radius: 10px; color: white;'>
-                <h1 style='margin: 0;'>{quality.overall_score:.0f}/100</h1>
-                <p style='margin: 5px 0;'>{quality.quality_assessment}</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        _render_quality_ring(quality.overall_score, quality.quality_assessment)
 
         st.divider()
 
-        # Detailed metrics
         col1, col2, col3 = st.columns(3)
 
         with col1:
@@ -480,13 +638,13 @@ def render_transcript_display():
             st.metric("Sentence Variety", f"{quality.sentence_variety:.0f}/100")
             st.metric("Punctuation Density", f"{quality.punctuation_density:.2%}")
 
-        # Issues and warnings
         if quality.issues:
             st.warning(f"Found {len(quality.issues)} issues")
             with st.expander("View Issues"):
                 for issue in quality.issues[:10]:
                     st.markdown(
-                        f"- **{issue.get('type', 'Unknown')}**: {issue.get('message', '')}"
+                        f"- **{issue.get('type', 'Unknown')}**: "
+                        f"{issue.get('message', '')}"
                     )
 
         if quality.warnings:
@@ -495,8 +653,10 @@ def render_transcript_display():
                     st.warning(warning)
 
     with tab4:
-        # Export options
-        st.subheader("Export Transcript")
+        st.markdown(
+            '<div class="section-hdr"><span class="dot"></span>Export Transcript</div>',
+            unsafe_allow_html=True,
+        )
 
         export_format = st.selectbox(
             "Select Format",
@@ -510,132 +670,124 @@ def render_transcript_display():
             "JSON (.json)": "json",
         }
 
-        if st.button("📥 Download", type="primary", use_container_width=True):
+        if st.button("Download", type="primary", use_container_width=True):
             workflow = _get_workflow()
             export_content = run_async(
                 workflow.export_transcript(result, format_map[export_format])
             )
 
-            # Create download button
             st.download_button(
-                label=f"Download {export_format}",
+                label=f"Save {export_format}",
                 data=export_content,
                 file_name=f"transcript.{format_map[export_format]}",
                 mime="text/plain",
             )
 
 
+# ──────────────────────────────────────
+#  Main
+# ──────────────────────────────────────
+
+
 def main():
-    """Main application entry point"""
+    """Main application entry point."""
 
-    # Setup page
     setup_page()
-
-    # Initialize state
     state = StateManager.get_state()
 
-    # Header - Compact
-    col1, col2 = st.columns([10, 1])
-    with col1:
-        st.title("ExactTranscriber")
-        st.caption("Multi-agent transcription with candidate models, a judge agent, and Parakeet alignment")
-    with col2:
-        if state.transcript_result and st.button("New"):
-            StateManager.reset_state()
-            st.rerun()
+    # Custom branded header
+    _render_header()
 
-    # Render sidebar
+    # Sidebar
     render_sidebar()
 
-    # Check for API key silently - don't show anything in UI
+    # API key check
     if not StateManager.get_api_key():
         st.error("Configuration error. Please check setup.")
         st.stop()
 
-    # Main content area
+    # ── IDLE: Upload ─────────────────────
     if state.status == ProcessingStatus.IDLE:
-        # File upload interface
-        st.markdown("### Upload Audio File")
+        st.markdown(
+            '<div class="section-hdr"><span class="dot"></span>Upload Audio</div>'
+            '<div class="upload-hint">'
+            "Drag and drop or browse &mdash; supports MP3, WAV, M4A, OGG, FLAC up to 200 MB"
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
         uploaded_file = st.file_uploader(
             "Choose an audio file",
             type=["mp3", "wav", "m4a", "ogg", "flac"],
-            help="Maximum file size: 200MB",
+            label_visibility="collapsed",
         )
 
         if uploaded_file:
-            # Display file info
             from utils import estimate_judge_pipeline_cost
 
-            col1, col2, col3, col4, col5 = st.columns(5)
-            with col1:
-                st.metric("File", uploaded_file.name)
-            with col2:
-                size_mb = uploaded_file.size / (1024 * 1024)
-                st.metric("Size", f"{size_mb:.1f} MB")
-            with col3:
-                file_type = Path(uploaded_file.name).suffix.lstrip(".")
-                st.metric("Format", file_type.upper())
-            with col4:
-                use_judge_pipeline = StateManager.get_use_judge_pipeline()
-                candidate_strategy = StateManager.get_candidate_strategy()
-                pipeline_label = (
-                    _format_strategy_label(candidate_strategy)
-                    if use_judge_pipeline
-                    else "Direct Gemini"
-                )
-                st.metric("Pipeline", pipeline_label)
-            with col5:
-                # Estimate cost (rough estimate based on file size)
-                estimated_duration = size_mb * 60  # Rough: 1MB ≈ 1 minute for MP3
-                _, cost_str = estimate_judge_pipeline_cost(
-                    estimated_duration,
-                    StateManager.get_model_name(),
-                    StateManager.get_candidate_strategy(),
-                    StateManager.get_use_judge_pipeline(),
-                    StateManager.get_judge_model_name(),
-                )
-                st.metric("Est. API Cost", cost_str)
+            size_mb = uploaded_file.size / (1024 * 1024)
+            file_type = Path(uploaded_file.name).suffix.lstrip(".")
+            use_judge = StateManager.get_use_judge_pipeline()
+            strategy = StateManager.get_candidate_strategy()
+            pipeline_label = (
+                _format_strategy_label(strategy) if use_judge else "Direct Gemini"
+            )
+            estimated_duration = size_mb * 60
+            _, cost_str = estimate_judge_pipeline_cost(
+                estimated_duration,
+                StateManager.get_model_name(),
+                strategy,
+                use_judge,
+                StateManager.get_judge_model_name(),
+            )
 
-            # Show active context if any
+            _render_info_grid(
+                [
+                    ("File", uploaded_file.name, False),
+                    ("Size", f"{size_mb:.1f} MB", False),
+                    ("Format", file_type.upper(), False),
+                    ("Pipeline", pipeline_label, True),
+                    ("Est. Cost", cost_str, True),
+                ]
+            )
+
+            # Context badges
             if hasattr(st.session_state, "user_context"):
-                ctx = st.session_state.user_context
-                active_context = []
-                if ctx.get("topic"):
-                    active_context.append(f"Topic: {ctx['topic']}")
-                if ctx.get("speakers"):
-                    active_context.append(f"Speakers: {', '.join(ctx['speakers'])}")
-                if ctx.get("format"):
-                    active_context.append(f"Format: {ctx['format']}")
-
-                if active_context:
-                    st.info("**Using context:** " + " | ".join(active_context))
+                _render_context_badges(st.session_state.user_context)
 
             # Transcribe button
             if st.button(
-                "🚀 Start Transcription", type="primary", use_container_width=True
+                "Start Transcription", type="primary", use_container_width=True
             ):
-                # Initialize workflow with the current pipeline configuration.
                 workflow = _get_workflow()
-
-                # Run transcription with proper event loop handling
                 run_async(handle_transcription(workflow, uploaded_file))
 
+    # ── PROCESSING ───────────────────────
     elif state.status == ProcessingStatus.PROCESSING:
-        # Show processing status
         st.info(f"Processing: {state.current_file}")
         st.progress(state.processing_progress)
 
+    # ── COMPLETE ─────────────────────────
     elif state.status == ProcessingStatus.COMPLETE:
-        # Show transcript and tools
+        # New session button
+        cols = st.columns([9, 1])
+        with cols[1]:
+            if st.button("New", use_container_width=True):
+                StateManager.reset_state()
+                st.rerun()
+
+        # Result summary strip
+        if state.transcript_result:
+            _render_result_strip(state.transcript_result)
+
         render_transcript_display()
 
+    # ── ERROR ────────────────────────────
     elif state.status == ProcessingStatus.ERROR:
-        # Show error
         st.error(f"Error: {state.error.message if state.error else 'Unknown error'}")
 
         if state.error and state.error.recoverable:
-            if st.button("🔄 Try Again"):
+            if st.button("Try Again"):
                 StateManager.reset_state()
                 st.rerun()
 
