@@ -31,6 +31,7 @@ ENV/
 .idea/
 .claude/
 CLAUDE.md
+AGENTS.md
 agent.md
 *.swp
 *.swo

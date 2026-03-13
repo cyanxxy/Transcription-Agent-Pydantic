@@ -102,11 +102,7 @@ def test_srt_long_text_wrapped() -> None:
             )
         ]
         srt = workflow._export_as_srt(segments, max_line_length=42)
-        lines = srt.strip().split("\n")
-        # The text line (line 2) may have newlines for wrapping
-        text_content = lines[2]
-        # Should be wrapped (contains newline in text portion)
-        # At minimum, SRT should contain the content
+        # At minimum, the wrapped SRT should still contain the content.
         assert "This is" in srt
     finally:
         workflow.cleanup()

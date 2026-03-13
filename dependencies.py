@@ -15,11 +15,26 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_GEMINI_MODELS = {
     "gemini-3-flash-preview",
-    "gemini-3-pro-preview",
+    "gemini-3.1-pro-preview",
+}
+GEMINI_MODEL_ALIASES = {
+    "gemini-3-pro-preview": "gemini-3.1-pro-preview",
+}
+SUPPORTED_CANDIDATE_STRATEGIES = {
+    "single_gemini",
+    "dual_gemini",
+    "gemini_plus_parakeet",
 }
 
 FLASH_THINKING_LEVELS = {"minimal", "low", "medium", "high"}
 PRO_THINKING_LEVELS = {"low", "high"}
+
+
+def normalize_gemini_model_name(model_name: str) -> str:
+    """Accept optional provider prefixes and return the bare Gemini model name."""
+    if model_name.startswith("google-gla:"):
+        model_name = model_name.split(":", 1)[1]
+    return GEMINI_MODEL_ALIASES.get(model_name, model_name)
 
 
 @dataclass
@@ -28,6 +43,8 @@ class TranscriptionDeps:
 
     api_key: str
     model_name: str = "gemini-3-flash-preview"  # Gemini 3 Flash (default)
+    judge_model_name: str = "gemini-3.1-pro-preview"
+    candidate_strategy: str = "dual_gemini"
     max_file_size_mb: int = 200
     chunk_duration_ms: int = 120000  # 2 minutes
     chunk_overlap_ms: int = 5000  # 5 seconds overlap
@@ -49,21 +66,30 @@ class TranscriptionDeps:
     remove_fillers: bool = False
     fix_capitalization: bool = True
 
-    # Orchestrator settings
-    # Note: Agent autonomously decides whether to use Parakeet (no enable flag)
+    # Judge pipeline settings
     parakeet_model: str = "nvidia/parakeet-ctc-0.6b"
-    use_orchestrator: bool = True  # Enable agentic orchestration
+    use_judge_pipeline: bool = True
 
     def __post_init__(self):
         """Initialize dependencies"""
         # Normalize model name (accept optional provider prefix)
-        if self.model_name.startswith("google-gla:"):
-            self.model_name = self.model_name.split(":", 1)[1]
+        self.model_name = normalize_gemini_model_name(self.model_name)
+        self.judge_model_name = normalize_gemini_model_name(self.judge_model_name)
 
         if self.model_name not in SUPPORTED_GEMINI_MODELS:
             raise ValueError(
                 f"Unsupported model: {self.model_name}. "
                 f"Supported models: {sorted(SUPPORTED_GEMINI_MODELS)}"
+            )
+        if self.judge_model_name not in SUPPORTED_GEMINI_MODELS:
+            raise ValueError(
+                f"Unsupported judge_model_name: {self.judge_model_name}. "
+                f"Supported models: {sorted(SUPPORTED_GEMINI_MODELS)}"
+            )
+        if self.candidate_strategy not in SUPPORTED_CANDIDATE_STRATEGIES:
+            raise ValueError(
+                f"Unsupported candidate_strategy: {self.candidate_strategy}. "
+                f"Supported strategies: {sorted(SUPPORTED_CANDIDATE_STRATEGIES)}"
             )
 
         if self.thinking_level not in FLASH_THINKING_LEVELS:
@@ -73,7 +99,7 @@ class TranscriptionDeps:
             )
 
         if (
-            self.model_name.startswith("gemini-3-pro")
+            "-pro" in self.model_name
             and self.thinking_level not in PRO_THINKING_LEVELS
         ):
             raise ValueError(
@@ -90,6 +116,43 @@ class TranscriptionDeps:
 
         # Create temp directory if it doesn't exist
         Path(self.temp_dir).mkdir(parents=True, exist_ok=True)
+
+    def resolve_candidate_specs(self) -> List[Dict[str, str]]:
+        """Return the configured transcript candidate plan for the judge pipeline."""
+        specs = [
+            {
+                "candidate_id": self.model_name.replace("-", "_"),
+                "label": f"Gemini {self.model_name}",
+                "kind": "gemini",
+                "model_name": self.model_name,
+            }
+        ]
+
+        if self.candidate_strategy == "dual_gemini":
+            secondary_model = (
+                "gemini-3.1-pro-preview"
+                if self.model_name != "gemini-3.1-pro-preview"
+                else "gemini-3-flash-preview"
+            )
+            specs.append(
+                {
+                    "candidate_id": secondary_model.replace("-", "_"),
+                    "label": f"Gemini {secondary_model}",
+                    "kind": "gemini",
+                    "model_name": secondary_model,
+                }
+            )
+        elif self.candidate_strategy == "gemini_plus_parakeet":
+            specs.append(
+                {
+                    "candidate_id": "parakeet_audio",
+                    "label": "Parakeet Audio",
+                    "kind": "parakeet",
+                    "model_name": self.parakeet_model,
+                }
+            )
+
+        return specs
 
     @property
     def chunk_size_bytes(self) -> int:
@@ -221,12 +284,15 @@ class AppDeps:
 
         Supported kwargs:
         - model_name: Gemini model to use
+        - judge_model_name: Gemini model used by the judge agent
+        - candidate_strategy: single_gemini, dual_gemini, gemini_plus_parakeet
         - auto_format: Enable auto-formatting
         - remove_fillers: Remove filler words
-        - use_orchestrator: Enable agentic orchestration (recommended)
-        - parakeet_model: NeMo model for timestamp correction
+        - use_judge_pipeline: Enable multi-agent judge pipeline
+        - parakeet_model: NeMo model used for Parakeet candidates/alignment
 
-        Note: Timestamp correction is decided autonomously by the agent.
+        Note: Post-judge timestamp alignment is only applied when the pipeline
+        detects that the judged transcript needs it.
         """
         # Extract transcription-specific kwargs
         transcription_kwargs = {
@@ -235,9 +301,11 @@ class AppDeps:
             if k
             in [
                 "model_name",
+                "judge_model_name",
+                "candidate_strategy",
                 "auto_format",
                 "remove_fillers",
-                "use_orchestrator",
+                "use_judge_pipeline",
                 "parakeet_model",
                 "thinking_level",
                 "max_file_size_mb",
@@ -246,6 +314,8 @@ class AppDeps:
                 "preserve_context",
             ]
         }
+        if "use_orchestrator" in kwargs and "use_judge_pipeline" not in kwargs:
+            transcription_kwargs["use_judge_pipeline"] = kwargs["use_orchestrator"]
         transcription = TranscriptionDeps(api_key=api_key, **transcription_kwargs)
         editing = EditingDeps(remove_fillers=transcription.remove_fillers)
         return cls(transcription=transcription, editing=editing)
@@ -275,16 +345,33 @@ class AppDeps:
         if not api_key:
             return None
 
+        app_state = getattr(st.session_state, "app_state", None)
+
+        def _session_value(name: str, default):
+            if hasattr(st.session_state, name):
+                return getattr(st.session_state, name)
+            if app_state is not None and hasattr(app_state, name):
+                return getattr(app_state, name)
+            return default
+
         # Get other settings from session state
-        model_name = getattr(st.session_state, "model_name", "gemini-3-flash-preview")
-        auto_format = getattr(st.session_state, "auto_format", True)
-        remove_fillers = getattr(st.session_state, "remove_fillers", False)
+        model_name = _session_value("model_name", "gemini-3-flash-preview")
+        judge_model_name = _session_value(
+            "judge_model_name", "gemini-3.1-pro-preview"
+        )
+        candidate_strategy = _session_value("candidate_strategy", "dual_gemini")
+        auto_format = _session_value("auto_format", True)
+        remove_fillers = _session_value("remove_fillers", False)
+        use_judge_pipeline = _session_value("use_judge_pipeline", True)
 
         return cls.from_config(
             api_key=api_key,
             model_name=model_name,
+            judge_model_name=judge_model_name,
+            candidate_strategy=candidate_strategy,
             auto_format=auto_format,
             remove_fillers=remove_fillers,
+            use_judge_pipeline=use_judge_pipeline,
         )
 
     def cleanup(self):

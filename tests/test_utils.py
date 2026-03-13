@@ -1,7 +1,6 @@
-import pytest
-
 from utils import (
     estimate_audio_tokens,
+    estimate_judge_pipeline_cost,
     estimate_transcription_cost,
     format_duration,
     sanitize_filename,
@@ -31,19 +30,63 @@ def test_cost_flash_model() -> None:
 
 
 def test_cost_pro_model_low_tier() -> None:
-    cost, cost_str = estimate_transcription_cost(60, "gemini-3-pro-preview")
+    cost, cost_str = estimate_transcription_cost(60, "gemini-3.1-pro-preview")
     assert cost > 0
 
 
 def test_cost_pro_model_high_tier() -> None:
     # Long audio to exceed 200k token threshold
-    cost, cost_str = estimate_transcription_cost(7000, "gemini-3-pro-preview")
+    cost, cost_str = estimate_transcription_cost(7000, "gemini-3.1-pro-preview")
     assert cost > 0
 
 
 def test_cost_very_short_audio() -> None:
     cost, cost_str = estimate_transcription_cost(1, "gemini-3-flash-preview")
     assert cost_str == "<$0.01"
+
+
+def test_judge_pipeline_cost_matches_direct_mode_when_disabled() -> None:
+    direct_cost, _ = estimate_transcription_cost(180, "gemini-3-flash-preview")
+    pipeline_cost, _ = estimate_judge_pipeline_cost(
+        180,
+        "gemini-3-flash-preview",
+        "dual_gemini",
+        False,
+    )
+    assert pipeline_cost == direct_cost
+
+
+def test_judge_pipeline_cost_dual_gemini_exceeds_single_gemini() -> None:
+    single_cost, _ = estimate_judge_pipeline_cost(
+        180,
+        "gemini-3-flash-preview",
+        "single_gemini",
+        True,
+    )
+    dual_cost, dual_cost_str = estimate_judge_pipeline_cost(
+        180,
+        "gemini-3-flash-preview",
+        "dual_gemini",
+        True,
+    )
+    assert dual_cost > single_cost
+    assert "$" in dual_cost_str
+
+
+def test_judge_pipeline_cost_parakeet_strategy_is_cheaper_than_dual_gemini() -> None:
+    parakeet_cost, _ = estimate_judge_pipeline_cost(
+        180,
+        "gemini-3-flash-preview",
+        "gemini_plus_parakeet",
+        True,
+    )
+    dual_cost, _ = estimate_judge_pipeline_cost(
+        180,
+        "gemini-3-flash-preview",
+        "dual_gemini",
+        True,
+    )
+    assert parakeet_cost < dual_cost
 
 
 def test_pricing_constants_exist() -> None:

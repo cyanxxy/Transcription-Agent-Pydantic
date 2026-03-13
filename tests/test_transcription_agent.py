@@ -1,5 +1,3 @@
-import pytest
-
 from models import TranscriptSegment
 from agents.transcription_agent import (
     adjust_timestamp,

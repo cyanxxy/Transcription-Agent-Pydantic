@@ -1,9 +1,9 @@
 """
-Timestamp correction using NVIDIA Parakeet + NeMo Forced Aligner
+Parakeet transcription and timestamp alignment helpers.
 
-This module provides accurate timestamp alignment by using Parakeet CTC model
-with NeMo's Forced Aligner to align Gemini's quality transcription text
-to precise audio timestamps.
+This module supports two roles in the judge pipeline:
+1. generating a transcript candidate directly from Parakeet
+2. aligning a judged transcript back to the audio for better timestamps
 """
 
 from typing import List, Dict, Any, Optional
@@ -91,6 +91,128 @@ async def fix_timestamps_with_parakeet(
     except Exception as e:
         logger.error(f"Timestamp correction failed: {e}")
         raise
+
+
+async def transcribe_with_parakeet(
+    deps: TranscriptionDeps,
+    audio_path: str,
+    speaker_names: Optional[List[str]] = None,
+) -> List[TranscriptSegment]:
+    """Generate a transcript candidate directly from Parakeet when available."""
+    model_name = getattr(deps, "parakeet_model", "nvidia/parakeet-ctc-0.6b")
+    model = await _get_parakeet_model(model_name)
+
+    transcription = await asyncio.to_thread(
+        model.transcribe,
+        [audio_path],
+        return_hypotheses=True,
+        timestamps=True,
+    )
+
+    if not transcription or not transcription[0]:
+        return []
+
+    candidate = transcription[0]
+    word_timestamps = _extract_timestamps_from_transcription(candidate)
+    if word_timestamps:
+        default_speaker = (
+            speaker_names[0] if speaker_names and len(speaker_names) == 1 else "Speaker 1"
+        )
+        return _group_word_timestamps_into_segments(word_timestamps, default_speaker)
+
+    text = (
+        getattr(candidate, "text", None)
+        or getattr(candidate, "pred_text", None)
+        or getattr(candidate, "transcript", None)
+        or ""
+    )
+    text = text.strip()
+    if not text:
+        return []
+
+    speaker = speaker_names[0] if speaker_names and len(speaker_names) == 1 else "Speaker 1"
+    return [TranscriptSegment(timestamp="[00:00:00]", speaker=speaker, text=text)]
+
+
+def analyze_timestamp_quality(
+    segments: List[TranscriptSegment], audio_duration: float
+) -> Dict[str, Any]:
+    """Analyze timestamp quality and recommend whether alignment is worthwhile."""
+    if not segments:
+        return {
+            "alignment_score": 0,
+            "issues": ["No segments to analyze"],
+            "recommendation": "skip",
+            "reason": "No segments available",
+        }
+
+    if audio_duration < 30:
+        return {
+            "alignment_score": 80,
+            "issues": [],
+            "recommendation": "skip",
+            "reason": "Audio too short (<30s), correction overhead not worth it",
+        }
+
+    issues = []
+    timestamps_seconds = [_parse_timestamp(segment.timestamp) for segment in segments]
+
+    if len(timestamps_seconds) < 2:
+        return {
+            "alignment_score": 50,
+            "issues": ["Too few segments for analysis"],
+            "recommendation": "skip",
+            "reason": "Not enough segments to analyze patterns",
+        }
+
+    non_monotonic = 0
+    for index in range(1, len(timestamps_seconds)):
+        if timestamps_seconds[index] < timestamps_seconds[index - 1]:
+            non_monotonic += 1
+            issues.append(f"Non-monotonic at segment {index}")
+
+    gaps = [
+        timestamps_seconds[index] - timestamps_seconds[index - 1]
+        for index in range(1, len(timestamps_seconds))
+    ]
+    irregular_pct = 0.0
+    if gaps:
+        avg_gap = sum(gaps) / len(gaps)
+        irregular_gaps = sum(1 for gap in gaps if gap < 0 or gap > avg_gap * 3)
+        irregular_pct = (irregular_gaps / len(gaps)) * 100
+        if irregular_pct > 20:
+            issues.append(f"Irregular gaps: {irregular_pct:.0f}% of segments")
+
+    last_ts = max(timestamps_seconds)
+    coverage = (last_ts / audio_duration) * 100 if audio_duration > 0 else 0
+    if coverage < 70:
+        issues.append(f"Poor coverage: timestamps only reach {coverage:.0f}% of audio")
+    elif coverage > 110:
+        issues.append("Timestamp drift: timestamps exceed audio duration")
+
+    score = 100
+    score -= non_monotonic * 15
+    score -= len([issue for issue in issues if "Irregular" in issue]) * 10
+    score -= len([issue for issue in issues if "coverage" in issue.lower()]) * 15
+    score -= len([issue for issue in issues if "drift" in issue.lower()]) * 20
+    score = max(0, min(100, score))
+
+    if score >= 85:
+        recommendation = "skip"
+        reason = f"Timestamps look good (score: {score})"
+    elif score >= 70:
+        recommendation = "optional"
+        reason = f"Timestamps acceptable but could improve (score: {score})"
+    else:
+        recommendation = "fix"
+        reason = f"Timestamps need correction (score: {score})"
+
+    return {
+        "alignment_score": score,
+        "issues": issues,
+        "recommendation": recommendation,
+        "reason": reason,
+    }
 
 
 def _run_alignment(
@@ -373,3 +495,81 @@ def _parse_timestamp(timestamp: str) -> float:
         hours, minutes, seconds = map(int, match.groups())
         return hours * 3600 + minutes * 60 + seconds
     return 0.0
+
+
+def _group_word_timestamps_into_segments(
+    word_timestamps: List[Dict[str, Any]],
+    speaker: str,
+    gap_threshold: float = 1.0,
+    max_words: int = 18,
+    max_duration: float = 8.0,
+) -> List[TranscriptSegment]:
+    """Build readable segments from word-level timestamps."""
+    if not word_timestamps:
+        return []
+
+    segments = []
+    current_words: List[Dict[str, Any]] = []
+
+    for word_info in word_timestamps:
+        word = str(word_info.get("word", "")).strip()
+        if not word:
+            continue
+
+        if not current_words:
+            current_words.append(word_info)
+            continue
+
+        start_time = current_words[0].get("start", 0.0)
+        last_end = current_words[-1].get("end", current_words[-1].get("start", 0.0))
+        next_start = word_info.get("start", last_end)
+        duration = next_start - start_time
+        gap = next_start - last_end
+
+        if (
+            gap >= gap_threshold
+            or len(current_words) >= max_words
+            or duration >= max_duration
+        ):
+            segments.append(_segment_from_words(current_words, speaker))
+            current_words = [word_info]
+        else:
+            current_words.append(word_info)
+
+    if current_words:
+        segments.append(_segment_from_words(current_words, speaker))
+
+    return segments
+
+
+def _segment_from_words(
+    word_infos: List[Dict[str, Any]], speaker: str
+) -> TranscriptSegment:
+    """Convert grouped word timings into a transcript segment."""
+    start_time = word_infos[0].get("start", 0.0)
+    words = [str(word_info.get("word", "")).strip() for word_info in word_infos]
+    text = _join_words(words)
+    return TranscriptSegment(
+        timestamp=_format_timestamp(start_time),
+        speaker=speaker,
+        text=text or "[inaudible]",
+    )
+
+
+def _join_words(words: List[str]) -> str:
+    """Join tokenized words while keeping punctuation spacing readable."""
+    text = ""
+    punctuation = {".", ",", "!", "?", ";", ":"}
+    closing = {"'", '"', ")", "]", "}"}
+
+    for word in words:
+        if not text:
+            text = word
+        elif word in punctuation or word in closing:
+            text += word
+        elif word.startswith("'"):
+            text += word
+        else:
+            text += f" {word}"
+
+    return text.strip()
