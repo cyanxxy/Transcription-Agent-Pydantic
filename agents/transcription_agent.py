@@ -26,7 +26,9 @@ logger = logging.getLogger(__name__)
 
 
 # Create main transcription agent with proper Pydantic AI setup
-def create_transcription_agent(deps: TranscriptionDeps) -> Agent:
+def create_transcription_agent(
+    deps: TranscriptionDeps,
+) -> Agent[TranscriptionDeps, List[TranscriptSegment]]:
     """Create a properly configured transcription agent"""
     model = GoogleModel(
         deps.model_name,
@@ -153,7 +155,7 @@ async def chunk_audio(deps: TranscriptionDeps, audio_path: str) -> List[Dict[str
     try:
         # Load audio in thread to avoid blocking
         audio = await asyncio.to_thread(AudioSegment.from_file, audio_path)
-        chunks = []
+        chunks: List[Dict[str, Any]] = []
 
         chunk_duration = deps.chunk_duration_ms
         overlap = deps.chunk_overlap_ms
@@ -192,7 +194,7 @@ async def chunk_audio(deps: TranscriptionDeps, audio_path: str) -> List[Dict[str
 
 
 async def run_transcription_agent(
-    agent: Agent,
+    agent: Agent[TranscriptionDeps, List[TranscriptSegment]],
     deps: TranscriptionDeps,
     audio_path: str,
     custom_prompt: Optional[str] = None,
@@ -265,11 +267,11 @@ def _build_google_settings(deps: TranscriptionDeps) -> GoogleModelSettings:
     }
 
     # Gemini 3 uses thinking_level (include_thoughts not supported by Pydantic AI)
-    settings_kwargs["google_thinking_config"] = {
+    settings_kwargs["google_thinking_config"] = {  # type: ignore[typeddict-unknown-key]
         "thinking_level": deps.thinking_level,
     }
 
-    return GoogleModelSettings(**settings_kwargs)
+    return GoogleModelSettings(**settings_kwargs)  # type: ignore[typeddict-item]
 
 
 def build_transcription_prompt(
@@ -318,7 +320,7 @@ async def merge_chunks(
     deps: TranscriptionDeps, chunk_results: List[List[TranscriptSegment]]
 ) -> List[TranscriptSegment]:
     """Merge transcription chunks into a single transcript"""
-    merged = []
+    merged: List[TranscriptSegment] = []
 
     for chunk_segments in chunk_results:
         # Remove duplicates from overlap regions

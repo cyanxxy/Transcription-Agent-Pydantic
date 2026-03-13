@@ -34,3 +34,16 @@ authors = [{ name = "Mansour Damanpak", email = "50705400+cyanxxy@users.noreply.
 license = { text = "MIT" }
 readme = "README.md"
 keywords = ["transcription", "streamlit", "audio", "gemini", "pydantic-ai", "judge-pipeline", "parakeet"]
+
+[tool.mypy]
+ignore_missing_imports = true
+exclude = ["venv", "tests"]
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = false
+init_typed = false
+
+[[tool.mypy.overrides]]
+module = "aiofiles.*"
+ignore_missing_imports = true

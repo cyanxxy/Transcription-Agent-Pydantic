@@ -116,7 +116,9 @@ async def transcribe_with_parakeet(
     word_timestamps = _extract_timestamps_from_transcription(candidate)
     if word_timestamps:
         default_speaker = (
-            speaker_names[0] if speaker_names and len(speaker_names) == 1 else "Speaker 1"
+            speaker_names[0]
+            if speaker_names and len(speaker_names) == 1
+            else "Speaker 1"
         )
         return _group_word_timestamps_into_segments(word_timestamps, default_speaker)
 
@@ -130,7 +132,9 @@ async def transcribe_with_parakeet(
     if not text:
         return []
 
-    speaker = speaker_names[0] if speaker_names and len(speaker_names) == 1 else "Speaker 1"
+    speaker = (
+        speaker_names[0] if speaker_names and len(speaker_names) == 1 else "Speaker 1"
+    )
     return [TranscriptSegment(timestamp="[00:00:00]", speaker=speaker, text=text)]
 
 
