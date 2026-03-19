@@ -16,17 +16,17 @@ from dependencies import TranscriptionDeps
 
 logger = logging.getLogger(__name__)
 
-# Lazy-loaded Parakeet model (cached at module level)
-_PARAKEET_MODEL = None
+# Lazy-loaded Parakeet models (cached by model name)
+_PARAKEET_MODEL_CACHE: Dict[str, Any] = {}
 _MODEL_LOCK = asyncio.Lock()
 
 
 async def _get_parakeet_model(model_name: str = "nvidia/parakeet-ctc-0.6b"):
     """Load Parakeet CTC model (lazy, cached, thread-safe)"""
-    global _PARAKEET_MODEL
+    global _PARAKEET_MODEL_CACHE
 
     async with _MODEL_LOCK:
-        if _PARAKEET_MODEL is None:
+        if model_name not in _PARAKEET_MODEL_CACHE:
             logger.info(f"Loading Parakeet model: {model_name}")
 
             def _load_model():
@@ -34,10 +34,10 @@ async def _get_parakeet_model(model_name: str = "nvidia/parakeet-ctc-0.6b"):
 
                 return nemo_asr.models.ASRModel.from_pretrained(model_name)
 
-            _PARAKEET_MODEL = await asyncio.to_thread(_load_model)
+            _PARAKEET_MODEL_CACHE[model_name] = await asyncio.to_thread(_load_model)
             logger.info("Parakeet model loaded successfully")
 
-    return _PARAKEET_MODEL
+    return _PARAKEET_MODEL_CACHE[model_name]
 
 
 async def fix_timestamps_with_parakeet(

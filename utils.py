@@ -5,11 +5,14 @@ Utility functions for ExactTranscriber v2.0
 import asyncio
 from typing import Any, Coroutine, Dict, Tuple, TypeVar
 
+from dependencies import resolve_dual_gemini_secondary_model
+
 T = TypeVar("T")
 
 # Gemini 3 pricing per 1M tokens (update when Google changes pricing)
 PRICING: Dict[str, Any] = {
-    "flash": {"input": 0.50, "output": 3.00},
+    "flash": {"input_text": 0.50, "input_audio": 1.00, "output": 3.00},
+    "flash_lite": {"input_text": 0.25, "input_audio": 0.50, "output": 1.50},
     "pro": {
         "input_low": 2.00,
         "output_low": 12.00,
@@ -62,10 +65,25 @@ def _estimate_model_token_cost(
     input_tokens: int,
     output_tokens: int,
     model_name: str = "gemini-3-flash-preview",
+    input_modality: str = "text",
 ) -> float:
     """Estimate model cost from explicit token counts."""
-    if "flash" in model_name.lower():
-        input_cost = (input_tokens / 1_000_000) * PRICING["flash"]["input"]
+    normalized_model_name = model_name.lower()
+    if "flash-lite" in normalized_model_name:
+        input_rate = (
+            PRICING["flash_lite"]["input_audio"]
+            if input_modality == "audio"
+            else PRICING["flash_lite"]["input_text"]
+        )
+        input_cost = (input_tokens / 1_000_000) * input_rate
+        output_cost = (output_tokens / 1_000_000) * PRICING["flash_lite"]["output"]
+    elif "flash" in normalized_model_name:
+        input_rate = (
+            PRICING["flash"]["input_audio"]
+            if input_modality == "audio"
+            else PRICING["flash"]["input_text"]
+        )
+        input_cost = (input_tokens / 1_000_000) * input_rate
         output_cost = (output_tokens / 1_000_000) * PRICING["flash"]["output"]
     else:
         threshold = PRICING["pro_tier_threshold"]
@@ -88,8 +106,12 @@ def estimate_transcription_cost(
     Estimate cost for transcribing audio.
 
     Gemini 3 Flash Preview pricing (per 1M tokens):
-    - Input: $0.50
+    - Input (audio): $1.00
     - Output: $3.00
+
+    Gemini 3.1 Flash-Lite Preview pricing (per 1M tokens):
+    - Input (audio): $0.50
+    - Output: $1.50
 
     Gemini 3 Pro Preview pricing (per 1M tokens):
     - <200k tokens: Input $2.00, Output $12.00
@@ -99,7 +121,12 @@ def estimate_transcription_cost(
     # Estimate tokens
     input_tokens = estimate_audio_tokens(duration_seconds)
     output_tokens = estimate_transcript_tokens(duration_seconds)
-    total_cost = _estimate_model_token_cost(input_tokens, output_tokens, model_name)
+    total_cost = _estimate_model_token_cost(
+        input_tokens,
+        output_tokens,
+        model_name,
+        input_modality="audio",
+    )
 
     # Format cost string
     if total_cost < 0.01:
@@ -131,11 +158,7 @@ def estimate_judge_pipeline_cost(
     transcript_tokens = estimate_transcript_tokens(duration_seconds)
 
     if candidate_strategy == "dual_gemini":
-        secondary_model = (
-            "gemini-3.1-pro-preview"
-            if model_name != "gemini-3.1-pro-preview"
-            else "gemini-3-flash-preview"
-        )
+        secondary_model = resolve_dual_gemini_secondary_model(model_name)
         secondary_cost, _ = estimate_transcription_cost(
             duration_seconds, secondary_model
         )
@@ -152,6 +175,7 @@ def estimate_judge_pipeline_cost(
         judge_input_tokens,
         judge_output_tokens,
         judge_model_name,
+        input_modality="text",
     )
 
     if total_cost < 0.01:

@@ -4,7 +4,12 @@ from agents.transcription_agent import (
     map_speakers_to_context,
     ensure_speaker_consistency,
     build_transcription_prompt,
+    process_audio_file,
+    merge_chunks,
+    _detect_overlap_boundary,
 )
+from dependencies import TranscriptionDeps
+import pytest
 
 
 # --- adjust_timestamp ---
@@ -133,9 +138,7 @@ def test_prompt_with_speakers() -> None:
 
 
 def test_prompt_with_context() -> None:
-    prompt = build_transcription_prompt(
-        "Medical discussion", None, None, None
-    )
+    prompt = build_transcription_prompt("Medical discussion", None, None, None)
     assert "Medical discussion" in prompt
 
 
@@ -150,3 +153,65 @@ def test_prompt_with_previous_context() -> None:
     prompt = build_transcription_prompt(None, "Previous speaker said hello", None, None)
     assert "PREVIOUS CONTEXT" in prompt
     assert "Previous speaker said hello" in prompt
+
+
+@pytest.mark.asyncio
+async def test_process_audio_file_counts_overlapping_chunks(
+    monkeypatch, tmp_path
+) -> None:
+    class FakeAudio:
+        frame_rate = 16_000
+        channels = 1
+
+        def __len__(self):
+            return 10_000
+
+    file_path = tmp_path / "audio.wav"
+    file_path.write_bytes(b"fake")
+
+    monkeypatch.setattr(
+        "agents.transcription_agent.AudioSegment.from_file",
+        lambda path: FakeAudio(),
+    )
+
+    deps = TranscriptionDeps(
+        api_key="test-key",
+        chunk_duration_ms=4_000,
+        chunk_overlap_ms=1_000,
+    )
+
+    try:
+        metadata = await process_audio_file(deps, str(file_path))
+    finally:
+        deps.cleanup()
+
+    assert metadata.needs_chunking is True
+    assert metadata.chunk_count == 4
+
+
+def test_detect_overlap_boundary_for_duplicate_segments() -> None:
+    previous_segments = [_seg("[00:00:05]", "Speaker 1", "hello there")]
+    next_segments = [
+        _seg("[00:00:05]", "Speaker 1", "hello there"),
+        _seg("[00:00:07]", "Speaker 1", "new content"),
+    ]
+
+    assert _detect_overlap_boundary(previous_segments, next_segments) == 1
+
+
+@pytest.mark.asyncio
+async def test_merge_chunks_preserves_repeated_phrase_when_timestamps_differ() -> None:
+    deps = TranscriptionDeps(api_key="test-key")
+    chunk_results = [
+        [_seg("[00:00:05]", "Speaker 1", "hello there")],
+        [_seg("[00:00:15]", "Speaker 1", "hello there")],
+    ]
+
+    try:
+        merged = await merge_chunks(deps, chunk_results)
+    finally:
+        deps.cleanup()
+
+    assert len(merged) == 2
+    assert merged[0].timestamp == "[00:00:05]"
+    assert merged[1].timestamp == "[00:00:15]"

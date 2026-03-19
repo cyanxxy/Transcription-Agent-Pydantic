@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator, field_serializer, Config
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime, timezone
 from enum import Enum
+import re
 
 
 class ProcessingStatus(str, Enum):
@@ -40,13 +41,6 @@ class AudioMetadata(BaseModel):
     needs_chunking: bool = Field(False, description="Whether file needs to be chunked")
     chunk_count: Optional[int] = Field(None, description="Number of chunks if chunked")
 
-    @field_validator("size_mb")
-    @classmethod
-    def validate_size(cls, v):
-        if v > 200:
-            raise ValueError("File size exceeds 200MB limit")
-        return v
-
 
 class TranscriptSegment(BaseModel):
     """Individual transcript segment with speaker and timestamp"""
@@ -55,6 +49,19 @@ class TranscriptSegment(BaseModel):
     speaker: str = Field(..., description="Speaker identifier (e.g., 'Speaker 1')")
     text: str = Field(..., min_length=1)
     confidence: Optional[float] = Field(None, ge=0, le=1)
+
+    @field_validator("timestamp")
+    @classmethod
+    def validate_timestamp(cls, v):
+        match = re.match(r"^\[(\d{2}):(\d{2}):(\d{2})\]$", v)
+        if not match:
+            raise ValueError("Timestamp must be formatted as [HH:MM:SS]")
+
+        _, minutes, seconds = map(int, match.groups())
+        if minutes >= 60 or seconds >= 60:
+            raise ValueError("Timestamp minutes and seconds must be less than 60")
+
+        return v
 
     @field_validator("speaker")
     @classmethod

@@ -24,14 +24,18 @@ def _candidate(candidate_id: str, text: str) -> TranscriptCandidate:
 
 
 class FakeAgent:
-    def __init__(self, output: JudgeDecision | None = None, exc: Exception | None = None):
+    def __init__(
+        self, output: JudgeDecision | None = None, exc: Exception | None = None
+    ):
         self.output = output
         self.exc = exc
         self.prompts: list[str] = []
+        self.model_settings = None
 
     async def run(self, prompt, deps, model_settings, usage_limits):
-        del deps, model_settings, usage_limits
+        del deps, usage_limits
         self.prompts.append(prompt)
+        self.model_settings = model_settings
         if self.exc is not None:
             raise self.exc
         return SimpleNamespace(output=self.output)
@@ -47,12 +51,14 @@ async def test_run_judge_agent_without_candidates() -> None:
 
     assert result.segments == []
     assert result.selected_candidate_ids == []
-    assert result.processing_notes == ["Judge skipped because no candidates were available."]
+    assert result.processing_notes == [
+        "Judge skipped because no candidates were available."
+    ]
 
 
 @pytest.mark.asyncio
 async def test_run_judge_agent_filters_unknown_selected_candidates() -> None:
-    deps = AppDeps.from_config(api_key="test-key")
+    deps = AppDeps.from_config(api_key="test-key", judge_thinking_level="low")
     candidates = [_candidate("flash", "hello"), _candidate("pro", "hello there")]
     fake_agent = FakeAgent(
         JudgeDecision(
@@ -78,6 +84,10 @@ async def test_run_judge_agent_filters_unknown_selected_candidates() -> None:
     assert "Candidate ID: flash" in fake_agent.prompts[0]
     assert "Candidate ID: pro" in fake_agent.prompts[0]
     assert "Medical interview" in fake_agent.prompts[0]
+    assert "Quality score:" not in fake_agent.prompts[0]
+    assert (
+        fake_agent.model_settings["google_thinking_config"]["thinking_level"] == "low"
+    )
 
 
 @pytest.mark.asyncio
@@ -94,3 +104,28 @@ async def test_run_judge_agent_falls_back_to_first_candidate_on_failure() -> Non
     assert result.segments == candidates[0].segments
     assert result.selected_candidate_ids == ["flash"]
     assert "Judge failed, falling back to flash" in result.processing_notes[0]
+
+
+@pytest.mark.asyncio
+async def test_run_judge_agent_falls_back_on_non_monotonic_output() -> None:
+    deps = AppDeps.from_config(api_key="test-key")
+    candidates = [_candidate("flash", "hello"), _candidate("pro", "hello there")]
+    fake_agent = FakeAgent(
+        JudgeDecision(
+            segments=[
+                _segment("later", "[00:00:05]"),
+                _segment("earlier", "[00:00:03]"),
+            ],
+            selected_candidate_ids=["pro"],
+            processing_notes=["Returned bad timestamps."],
+        )
+    )
+
+    try:
+        result = await run_judge_agent(deps, candidates, agent=fake_agent)
+    finally:
+        deps.cleanup()
+
+    assert result.segments == candidates[0].segments
+    assert result.selected_candidate_ids == ["flash"]
+    assert "non-monotonic timestamps" in result.processing_notes[0]

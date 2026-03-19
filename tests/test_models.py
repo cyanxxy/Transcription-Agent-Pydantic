@@ -60,14 +60,12 @@ def test_invalid_timestamp_format() -> None:
 
 
 def test_invalid_timestamp_minutes() -> None:
-    # Pattern is just \d{2}:\d{2}:\d{2}, so "99:99:99" passes regex
-    # but it's technically valid per the pattern
-    seg = TranscriptSegment(
-        timestamp="[99:99:99]",
-        speaker="Alice",
-        text="Hello",
-    )
-    assert seg.timestamp == "[99:99:99]"
+    with pytest.raises(Exception):
+        TranscriptSegment(
+            timestamp="[99:99:99]",
+            speaker="Alice",
+            text="Hello",
+        )
 
 
 def test_empty_speaker() -> None:
@@ -131,14 +129,14 @@ def test_audio_metadata_valid() -> None:
     assert meta.needs_chunking is False
 
 
-def test_audio_metadata_exceeds_size() -> None:
-    with pytest.raises(Exception, match="200MB"):
-        AudioMetadata(
-            filename="big.wav",
-            duration=3600,
-            size_mb=250,
-            format=AudioFormat.WAV,
-        )
+def test_audio_metadata_allows_large_size_values() -> None:
+    meta = AudioMetadata(
+        filename="big.wav",
+        duration=3600,
+        size_mb=250,
+        format=AudioFormat.WAV,
+    )
+    assert meta.size_mb == 250
 
 
 def test_audio_metadata_with_chunking() -> None:
@@ -225,9 +223,7 @@ def test_judge_decision_defaults() -> None:
 
 
 def test_result_created_at_has_timezone() -> None:
-    seg = TranscriptSegment(
-        timestamp="[00:00:00]", speaker="Alice", text="Hello"
-    )
+    seg = TranscriptSegment(timestamp="[00:00:00]", speaker="Alice", text="Hello")
     meta = AudioMetadata(
         filename="test.mp3", duration=10, size_mb=1, format=AudioFormat.MP3
     )
@@ -249,9 +245,7 @@ def test_result_created_at_has_timezone() -> None:
 
 
 def test_result_serializes_datetime() -> None:
-    seg = TranscriptSegment(
-        timestamp="[00:00:00]", speaker="Alice", text="Hello"
-    )
+    seg = TranscriptSegment(timestamp="[00:00:00]", speaker="Alice", text="Hello")
     meta = AudioMetadata(
         filename="test.mp3", duration=10, size_mb=1, format=AudioFormat.MP3
     )

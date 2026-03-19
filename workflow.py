@@ -12,6 +12,9 @@ from dataclasses import dataclass, replace
 import asyncio
 import logging
 from datetime import datetime
+import os
+import shutil
+import tempfile
 
 from pydantic_ai import Agent
 from models import (
@@ -23,7 +26,7 @@ from models import (
     TranscriptQuality,
     ProcessingStatus,
 )
-from dependencies import AppDeps
+from dependencies import AppDeps, TranscriptionDeps
 
 # Import agent tools
 from agents.transcription_agent import (
@@ -75,6 +78,7 @@ class TranscriptionWorkflow:
         self.current_status = ProcessingStatus.IDLE
         self.current_file: Optional[str] = None
         self.processing_start: Optional[datetime] = None
+        self._run_transcription_deps: Optional[TranscriptionDeps] = None
 
     @property
     def judge_agent(self) -> Agent[AppDeps, JudgeDecision]:
@@ -82,6 +86,11 @@ class TranscriptionWorkflow:
         if self._judge_agent is None:
             self._judge_agent = create_judge_agent(self.deps)
         return self._judge_agent
+
+    @property
+    def active_transcription_deps(self) -> TranscriptionDeps:
+        """Return run-scoped transcription deps when a run is active."""
+        return self._run_transcription_deps or self.deps.transcription
 
     async def transcribe_audio(
         self,
@@ -101,6 +110,7 @@ class TranscriptionWorkflow:
         self.current_status = ProcessingStatus.PROCESSING
         self.current_file = filename
         self.processing_start = datetime.now()
+        self._run_transcription_deps = self._create_run_transcription_deps()
 
         try:
             # Step 1: Validate file
@@ -108,7 +118,7 @@ class TranscriptionWorkflow:
                 progress_callback("Validating audio file...", 0.1)
 
             validation = await validate_audio_file(
-                self.deps.transcription, file_data, filename
+                self.active_transcription_deps, file_data, filename
             )
 
             if not validation.get("valid"):
@@ -119,7 +129,9 @@ class TranscriptionWorkflow:
                 progress_callback("Processing audio...", 0.2)
 
             temp_path: str = validation["temp_path"]
-            metadata = await process_audio_file(self.deps.transcription, temp_path)
+            metadata = await process_audio_file(
+                self.active_transcription_deps, temp_path
+            )
 
             # Step 2.5: Process user context if provided
             context_prompt = ""
@@ -252,7 +264,7 @@ class TranscriptionWorkflow:
             progress_callback("Generating transcript candidates...", 0.3)
 
         if metadata.needs_chunking:
-            audio_units = await chunk_audio(self.deps.transcription, audio_path)
+            audio_units = await chunk_audio(self.active_transcription_deps, audio_path)
         else:
             audio_units = [
                 {
@@ -316,13 +328,18 @@ class TranscriptionWorkflow:
                 bucket["chunks"].append(candidate.segments)
                 bucket["notes"].extend(candidate.notes)
 
-            if unit_result.final_segments and self.deps.transcription.preserve_context:
+            if (
+                unit_result.final_segments
+                and self.active_transcription_deps.preserve_context
+            ):
                 previous_context = self._build_followup_context(
                     unit_result.final_segments
                 )
 
         if metadata.needs_chunking:
-            final_segments = await merge_chunks(self.deps.transcription, judged_chunks)
+            final_segments = await merge_chunks(
+                self.active_transcription_deps, judged_chunks
+            )
         else:
             final_segments = judged_chunks[0] if judged_chunks else []
 
@@ -433,7 +450,7 @@ class TranscriptionWorkflow:
         speaker_names: Optional[List[str]],
     ) -> List[TranscriptCandidate]:
         """Run the configured candidate transcription plan for one audio span."""
-        specs = self.deps.transcription.resolve_candidate_specs()
+        specs = self.active_transcription_deps.resolve_candidate_specs()
         tasks = [
             self._run_candidate_spec(
                 spec,
@@ -463,7 +480,7 @@ class TranscriptionWorkflow:
         try:
             if spec["kind"] == "gemini":
                 candidate_deps = replace(
-                    self.deps.transcription, model_name=spec["model_name"]
+                    self.active_transcription_deps, model_name=spec["model_name"]
                 )
                 candidate_agent = create_transcription_agent(candidate_deps)
                 segments = await run_transcription_agent(
@@ -477,7 +494,7 @@ class TranscriptionWorkflow:
                 )
             else:
                 segments = await transcribe_with_parakeet(
-                    self.deps.transcription,
+                    self.active_transcription_deps,
                     audio_path,
                     speaker_names,
                 )
@@ -531,7 +548,9 @@ class TranscriptionWorkflow:
             elif len(chunks) == 1:
                 merged_segments = chunks[0]
             else:
-                merged_segments = await merge_chunks(self.deps.transcription, chunks)
+                merged_segments = await merge_chunks(
+                    self.active_transcription_deps, chunks
+                )
 
             if speaker_names and merged_segments:
                 merged_segments = map_speakers_to_context(
@@ -572,7 +591,7 @@ class TranscriptionWorkflow:
 
         try:
             corrected = await fix_timestamps_with_parakeet(
-                self.deps.transcription,
+                self.active_transcription_deps,
                 audio_path,
                 segments,
             )
@@ -619,7 +638,7 @@ class TranscriptionWorkflow:
 
             segments = await run_transcription_agent(
                 self.transcription_agent,
-                self.deps.transcription,
+                self.active_transcription_deps,
                 audio_path,
                 custom_prompt,
                 None,
@@ -632,7 +651,7 @@ class TranscriptionWorkflow:
             segments = map_speakers_to_context(segments, speaker_names)
 
         # Step 4: Auto-format if enabled
-        if self.deps.transcription.auto_format:
+        if self.active_transcription_deps.auto_format:
             if progress_callback:
                 progress_callback("Formatting transcript...", 0.7)
             # Auto-formatting handled by editing tools if needed
@@ -653,7 +672,7 @@ class TranscriptionWorkflow:
             progress_callback("Splitting audio into chunks...", 0.3)
 
         # Create chunks directly
-        chunks = await chunk_audio(self.deps.transcription, audio_path)
+        chunks = await chunk_audio(self.active_transcription_deps, audio_path)
 
         # Transcribe each chunk with context from previous chunks
         all_segments = []
@@ -669,7 +688,7 @@ class TranscriptionWorkflow:
             # Direct transcription call through the agent
             chunk_segments = await run_transcription_agent(
                 self.transcription_agent,
-                self.deps.transcription,
+                self.active_transcription_deps,
                 chunk_info["path"],
                 custom_prompt,
                 chunk_info,
@@ -679,7 +698,7 @@ class TranscriptionWorkflow:
             all_segments.append(chunk_segments)
 
             # Build context for next chunk (last 30 seconds of text)
-            if chunk_segments and self.deps.transcription.preserve_context:
+            if chunk_segments and self.active_transcription_deps.preserve_context:
                 # Get last few segments as context
                 context_segments = (
                     chunk_segments[-5:] if len(chunk_segments) > 5 else chunk_segments
@@ -692,7 +711,9 @@ class TranscriptionWorkflow:
         if progress_callback:
             progress_callback("Merging transcription chunks...", 0.7)
 
-        merged_segments = await merge_chunks(self.deps.transcription, all_segments)
+        merged_segments = await merge_chunks(
+            self.active_transcription_deps, all_segments
+        )
 
         return merged_segments
 
@@ -728,11 +749,22 @@ class TranscriptionWorkflow:
         )
 
     def _cleanup_temp_files(self):
-        """Clean up temporary files"""
+        """Clean up run-scoped temporary files."""
         try:
-            self.deps.transcription.cleanup()
+            if self._run_transcription_deps is not None:
+                shutil.rmtree(self._run_transcription_deps.temp_dir, ignore_errors=True)
+                self._run_transcription_deps = None
         except Exception as e:
             logger.warning(f"Failed to clean up temp files: {e}")
+
+    def _create_run_transcription_deps(self) -> TranscriptionDeps:
+        """Create per-run transcription deps with an isolated temp workspace."""
+        os.makedirs(self.deps.transcription.temp_dir, exist_ok=True)
+        run_temp_dir = tempfile.mkdtemp(
+            prefix="run_",
+            dir=self.deps.transcription.temp_dir,
+        )
+        return replace(self.deps.transcription, temp_dir=run_temp_dir)
 
     async def edit_transcript(
         self, result: TranscriptResult, operation: str, **kwargs

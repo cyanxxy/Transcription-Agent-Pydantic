@@ -70,6 +70,8 @@ async def validate_audio_file(
 ) -> Dict[str, Any]:
     """Validate audio file before processing"""
     try:
+        Path(deps.temp_dir).mkdir(parents=True, exist_ok=True)
+
         # Check file size
         size_mb = len(file_data) / (1024 * 1024)
         if size_mb > deps.max_file_size_mb:
@@ -131,9 +133,8 @@ async def process_audio_file(deps: TranscriptionDeps, file_path: str) -> AudioMe
 
         chunk_count = None
         if needs_chunking:
-            chunk_count = (
-                duration_ms + deps.chunk_duration_ms - 1
-            ) // deps.chunk_duration_ms
+            step_size = deps.chunk_duration_ms - deps.chunk_overlap_ms
+            chunk_count = (duration_ms + step_size - 1) // step_size
 
         return AudioMetadata(
             filename=filename,
@@ -153,6 +154,8 @@ async def process_audio_file(deps: TranscriptionDeps, file_path: str) -> AudioMe
 async def chunk_audio(deps: TranscriptionDeps, audio_path: str) -> List[Dict[str, Any]]:
     """Split audio into chunks for processing"""
     try:
+        Path(deps.temp_dir).mkdir(parents=True, exist_ok=True)
+
         # Load audio in thread to avoid blocking
         audio = await asyncio.to_thread(AudioSegment.from_file, audio_path)
         chunks: List[Dict[str, Any]] = []
@@ -268,7 +271,7 @@ def _build_google_settings(deps: TranscriptionDeps) -> GoogleModelSettings:
 
     # Gemini 3 uses thinking_level (include_thoughts not supported by Pydantic AI)
     settings_kwargs["google_thinking_config"] = {  # type: ignore[typeddict-unknown-key]
-        "thinking_level": deps.thinking_level,
+        "thinking_level": deps.transcription_thinking_level,
     }
 
     return GoogleModelSettings(**settings_kwargs)  # type: ignore[typeddict-item]
@@ -323,15 +326,10 @@ async def merge_chunks(
     merged: List[TranscriptSegment] = []
 
     for chunk_segments in chunk_results:
-        # Remove duplicates from overlap regions
         if merged and chunk_segments:
-            # Check for overlap with last segment of previous chunk
-            last_text = merged[-1].text.lower().strip()
-            first_text = chunk_segments[0].text.lower().strip()
-
-            # Simple duplicate detection
-            if last_text == first_text or last_text.endswith(first_text[:20]):
-                chunk_segments = chunk_segments[1:]  # Skip first segment
+            overlap_count = _detect_overlap_boundary(merged, chunk_segments)
+            if overlap_count:
+                chunk_segments = chunk_segments[overlap_count:]
 
         merged.extend(chunk_segments)
 
@@ -339,6 +337,72 @@ async def merge_chunks(
     merged = ensure_speaker_consistency(merged, preserve_names=True)
 
     return merged
+
+
+def _detect_overlap_boundary(
+    previous_segments: List[TranscriptSegment],
+    next_segments: List[TranscriptSegment],
+    max_overlap_segments: int = 5,
+    timestamp_tolerance_seconds: float = 2.0,
+) -> int:
+    """Return how many leading segments from the next chunk should be dropped."""
+    max_window = min(max_overlap_segments, len(previous_segments), len(next_segments))
+    for overlap_size in range(max_window, 0, -1):
+        previous_window = previous_segments[-overlap_size:]
+        next_window = next_segments[:overlap_size]
+        if all(
+            _segments_match_for_overlap(
+                previous_segment,
+                next_segment,
+                timestamp_tolerance_seconds=timestamp_tolerance_seconds,
+            )
+            for previous_segment, next_segment in zip(previous_window, next_window)
+        ):
+            return overlap_size
+
+    return 0
+
+
+def _segments_match_for_overlap(
+    previous_segment: TranscriptSegment,
+    next_segment: TranscriptSegment,
+    timestamp_tolerance_seconds: float = 2.0,
+) -> bool:
+    """Check whether two segments represent duplicated speech in an overlap."""
+    if _normalize_speaker(previous_segment.speaker) != _normalize_speaker(
+        next_segment.speaker
+    ):
+        return False
+
+    if _normalize_text(previous_segment.text) != _normalize_text(next_segment.text):
+        return False
+
+    previous_ts = _timestamp_to_seconds(previous_segment.timestamp)
+    next_ts = _timestamp_to_seconds(next_segment.timestamp)
+    if previous_ts is None or next_ts is None:
+        return False
+
+    return abs(previous_ts - next_ts) <= timestamp_tolerance_seconds
+
+
+def _normalize_speaker(speaker: str) -> str:
+    return re.sub(r"\s+", " ", speaker.strip().lower())
+
+
+def _normalize_text(text: str) -> str:
+    text = text.lower()
+    text = re.sub(r"[^\w\s']", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _timestamp_to_seconds(timestamp: str) -> Optional[float]:
+    match = re.match(r"^\[(\d{2}):(\d{2}):(\d{2})\]$", timestamp)
+    if not match:
+        return None
+
+    hours, minutes, seconds = map(int, match.groups())
+    return float(hours * 3600 + minutes * 60 + seconds)
 
 
 def adjust_timestamp(timestamp: str, offset_seconds: float) -> str:

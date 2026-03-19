@@ -93,7 +93,7 @@ When audio is chunked, the app runs candidate generation and judging per chunk, 
 | Strategy | What runs |
 | --- | --- |
 | `single_gemini` | One Gemini transcription candidate, then judge cleanup |
-| `dual_gemini` | Primary Gemini model plus the other Gemini model, then judge selection/merge |
+| `dual_gemini` | Primary Gemini model plus the configured secondary Gemini model, then judge selection/merge |
 | `gemini_plus_parakeet` | Gemini plus Parakeet ASR as transcript candidates, then judge selection/merge |
 
 ### Models
@@ -101,12 +101,22 @@ When audio is chunked, the app runs candidate generation and judging per chunk, 
 Supported Gemini models:
 
 - `gemini-3-flash-preview`
+- `gemini-3.1-flash-lite-preview`
 - `gemini-3.1-pro-preview`
 
 The primary model is chosen in the UI. The judge agent uses `gemini-3.1-pro-preview`
-by default, and the UI label is `3.1 Pro (Quality)`.
+by default, and the UI label is `3.1 Pro (Judge/Quality)`.
 For backward compatibility, the app normalizes the deprecated
 `gemini-3-pro-preview` name to `gemini-3.1-pro-preview`.
+`dual_gemini` uses the following mapping:
+
+- `gemini-3-flash-preview` -> `gemini-3.1-flash-lite-preview`
+- `gemini-3.1-flash-lite-preview` -> `gemini-3-flash-preview`
+- `gemini-3.1-pro-preview` -> `gemini-3-flash-preview`
+
+Advanced config can set `transcription_thinking_level` and `judge_thinking_level`
+independently through `AppDeps.from_config()`. The legacy `thinking_level`
+alias is still accepted for transcription compatibility.
 
 ## UI Usage
 

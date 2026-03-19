@@ -6,6 +6,7 @@ from utils import (
     sanitize_filename,
     PRICING,
 )
+from dependencies import resolve_dual_gemini_secondary_model
 
 
 # --- estimate_audio_tokens ---
@@ -25,6 +26,12 @@ def test_audio_tokens_zero() -> None:
 
 def test_cost_flash_model() -> None:
     cost, cost_str = estimate_transcription_cost(60, "gemini-3-flash-preview")
+    assert cost > 0
+    assert "$" in cost_str
+
+
+def test_cost_flash_lite_model() -> None:
+    cost, cost_str = estimate_transcription_cost(60, "gemini-3.1-flash-lite-preview")
     assert cost > 0
     assert "$" in cost_str
 
@@ -73,6 +80,12 @@ def test_judge_pipeline_cost_dual_gemini_exceeds_single_gemini() -> None:
     assert "$" in dual_cost_str
 
 
+def test_dual_gemini_secondary_mapping_prefers_flash_lite_for_flash() -> None:
+    assert resolve_dual_gemini_secondary_model("gemini-3-flash-preview") == "gemini-3.1-flash-lite-preview"
+    assert resolve_dual_gemini_secondary_model("gemini-3.1-flash-lite-preview") == "gemini-3-flash-preview"
+    assert resolve_dual_gemini_secondary_model("gemini-3.1-pro-preview") == "gemini-3-flash-preview"
+
+
 def test_judge_pipeline_cost_parakeet_strategy_is_cheaper_than_dual_gemini() -> None:
     parakeet_cost, _ = estimate_judge_pipeline_cost(
         180,
@@ -91,10 +104,15 @@ def test_judge_pipeline_cost_parakeet_strategy_is_cheaper_than_dual_gemini() -> 
 
 def test_pricing_constants_exist() -> None:
     assert "flash" in PRICING
+    assert "flash_lite" in PRICING
     assert "pro" in PRICING
     assert "pro_tier_threshold" in PRICING
-    assert PRICING["flash"]["input"] == 0.50
+    assert PRICING["flash"]["input_text"] == 0.50
+    assert PRICING["flash"]["input_audio"] == 1.00
     assert PRICING["flash"]["output"] == 3.00
+    assert PRICING["flash_lite"]["input_text"] == 0.25
+    assert PRICING["flash_lite"]["input_audio"] == 0.50
+    assert PRICING["flash_lite"]["output"] == 1.50
 
 
 # --- format_duration ---

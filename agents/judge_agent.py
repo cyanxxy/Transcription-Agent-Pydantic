@@ -15,7 +15,7 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.usage import UsageLimits
 
 from dependencies import AppDeps
-from models import JudgeDecision, TranscriptCandidate
+from models import JudgeDecision, TranscriptCandidate, TranscriptSegment
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +59,7 @@ OUTPUT:
         ctx: RunContext[AppDeps], output: JudgeDecision
     ) -> JudgeDecision:
         del ctx
-        if not output.segments:
-            raise ValueError("Judge returned no segments despite having candidates.")
-
+        _validate_judge_decision(output)
         return output
 
     return agent
@@ -83,11 +81,6 @@ def _build_judge_prompt(
 ) -> str:
     candidate_blocks = []
     for candidate in candidates:
-        quality = (
-            f"{candidate.quality_score:.1f}"
-            if candidate.quality_score is not None
-            else "unknown"
-        )
         notes = "; ".join(candidate.notes) if candidate.notes else "none"
         candidate_blocks.append(
             "\n".join(
@@ -96,7 +89,6 @@ def _build_judge_prompt(
                     f"Label: {candidate.label}",
                     f"Kind: {candidate.kind}",
                     f"Model: {candidate.model_name}",
-                    f"Quality score: {quality}",
                     f"Notes: {notes}",
                     "Transcript:",
                     _format_segments(candidate),
@@ -143,7 +135,7 @@ async def run_judge_agent(
         temperature=1.0,
         max_tokens=deps.transcription.max_output_tokens,
         google_thinking_config={  # type: ignore[typeddict-unknown-key]
-            "thinking_level": deps.transcription.thinking_level,
+            "thinking_level": deps.transcription.judge_thinking_level,
         },
     )
 
@@ -154,6 +146,7 @@ async def run_judge_agent(
             model_settings=model_settings,
             usage_limits=UsageLimits(request_limit=5),
         )
+        _validate_judge_decision(result.output)
         valid_candidate_ids = {candidate.candidate_id for candidate in candidates}
         result.output.selected_candidate_ids = [
             candidate_id
@@ -177,3 +170,35 @@ async def run_judge_agent(
                 f"Judge failed, falling back to {candidates[0].label}: {exc}"
             ],
         )
+
+
+def _validate_judge_decision(output: JudgeDecision) -> None:
+    """Reject structurally valid but unusable judge decisions."""
+    if not output.segments:
+        raise ValueError("Judge returned no segments despite having candidates.")
+    if not _timestamps_are_monotonic(output.segments):
+        raise ValueError("Judge returned non-monotonic timestamps.")
+
+
+def _timestamps_are_monotonic(segments: List[TranscriptSegment]) -> bool:
+    previous_timestamp: Optional[tuple[int, int, int]] = None
+    for segment in segments:
+        timestamp = _parse_timestamp(segment.timestamp)
+        if timestamp is None:
+            return False
+        if previous_timestamp is not None and timestamp < previous_timestamp:
+            return False
+        previous_timestamp = timestamp
+    return True
+
+
+def _parse_timestamp(timestamp: str) -> Optional[tuple[int, int, int]]:
+    stripped = timestamp.strip("[]")
+    parts = stripped.split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        hours, minutes, seconds = map(int, parts)
+    except ValueError:
+        return None
+    return hours, minutes, seconds

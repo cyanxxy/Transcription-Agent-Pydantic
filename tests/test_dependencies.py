@@ -1,15 +1,16 @@
 import pytest
 from types import SimpleNamespace
 
-import dependencies as dependencies_module
 from dependencies import (
     TranscriptionDeps,
     EditingDeps,
     QualityDeps,
     ExportDeps,
     AppDeps,
+    SUPPORTED_GEMINI_MODELS,
+    resolve_dual_gemini_secondary_model,
 )
-from models import AppState
+from streamlit_deps import build_app_deps_from_streamlit
 
 
 # --- TranscriptionDeps validation ---
@@ -29,7 +30,8 @@ def test_thinking_level_validation_for_pro() -> None:
         TranscriptionDeps(
             api_key="test-key",
             model_name="gemini-3.1-pro-preview",
-            thinking_level="medium",
+            transcription_thinking_level="minimal",
+            judge_thinking_level="medium",
         )
 
 
@@ -38,30 +40,48 @@ def test_valid_flash_defaults() -> None:
     assert deps.model_name == "gemini-3-flash-preview"
     assert deps.judge_model_name == "gemini-3.1-pro-preview"
     assert deps.candidate_strategy == "dual_gemini"
+    assert deps.transcription_thinking_level == "high"
+    assert deps.judge_thinking_level == "medium"
     assert deps.thinking_level == "high"
     assert deps.chunk_duration_ms == 120000
     assert deps.chunk_overlap_ms == 5000
     assert deps.max_file_size_mb == 200
     assert deps.use_judge_pipeline is True
+    assert "gemini-3.1-flash-lite-preview" in SUPPORTED_GEMINI_MODELS
 
 
 def test_valid_pro_creation() -> None:
     deps = TranscriptionDeps(
         api_key="test-key",
         model_name="gemini-3.1-pro-preview",
-        thinking_level="high",
+        transcription_thinking_level="medium",
+        judge_thinking_level="high",
     )
     assert deps.model_name == "gemini-3.1-pro-preview"
-    assert deps.thinking_level == "high"
+    assert deps.transcription_thinking_level == "medium"
+    assert deps.judge_thinking_level == "high"
 
 
-def test_pro_low_thinking_level() -> None:
+def test_valid_flash_lite_creation() -> None:
+    deps = TranscriptionDeps(
+        api_key="test-key",
+        model_name="gemini-3.1-flash-lite-preview",
+        transcription_thinking_level="minimal",
+        judge_thinking_level="medium",
+    )
+    assert deps.model_name == "gemini-3.1-flash-lite-preview"
+    assert deps.transcription_thinking_level == "minimal"
+    assert deps.judge_thinking_level == "medium"
+
+
+def test_pro_accepts_medium_thinking_level() -> None:
     deps = TranscriptionDeps(
         api_key="test-key",
         model_name="gemini-3.1-pro-preview",
-        thinking_level="low",
+        transcription_thinking_level="medium",
+        judge_thinking_level="medium",
     )
-    assert deps.thinking_level == "low"
+    assert deps.transcription_thinking_level == "medium"
 
 
 def test_normalizes_deprecated_gemini_3_pro_name() -> None:
@@ -89,8 +109,12 @@ def test_unsupported_model() -> None:
 
 
 def test_invalid_thinking_level() -> None:
-    with pytest.raises(ValueError, match="Invalid thinking_level"):
-        TranscriptionDeps(api_key="test-key", thinking_level="ultra")
+    with pytest.raises(ValueError, match="Invalid transcription_thinking_level"):
+        TranscriptionDeps(
+            api_key="test-key",
+            transcription_thinking_level="ultra",
+            judge_thinking_level="medium",
+        )
 
 
 def test_invalid_candidate_strategy() -> None:
@@ -127,7 +151,22 @@ def test_resolve_candidate_specs_for_dual_gemini() -> None:
     specs = deps.resolve_candidate_specs()
     assert len(specs) == 2
     assert specs[0]["kind"] == "gemini"
-    assert specs[1]["model_name"] == "gemini-3.1-pro-preview"
+    assert specs[1]["model_name"] == "gemini-3.1-flash-lite-preview"
+    assert (
+        resolve_dual_gemini_secondary_model("gemini-3-flash-preview")
+        == "gemini-3.1-flash-lite-preview"
+    )
+    deps.cleanup()
+
+
+def test_resolve_candidate_specs_for_flash_lite_dual_gemini() -> None:
+    deps = TranscriptionDeps(
+        api_key="test-key",
+        model_name="gemini-3.1-flash-lite-preview",
+    )
+    specs = deps.resolve_candidate_specs()
+    assert len(specs) == 2
+    assert specs[1]["model_name"] == "gemini-3-flash-preview"
     deps.cleanup()
 
 
@@ -182,15 +221,31 @@ def test_export_deps_defaults() -> None:
 def test_app_deps_from_config() -> None:
     deps = AppDeps.from_config(
         api_key="test-key",
-        model_name="gemini-3-flash-preview",
+        model_name="gemini-3.1-flash-lite-preview",
+        judge_model_name="gemini-3.1-pro-preview",
         candidate_strategy="single_gemini",
         auto_format=True,
         remove_fillers=True,
+        transcription_thinking_level="low",
+        judge_thinking_level="medium",
     )
     assert deps.transcription.api_key == "test-key"
     assert deps.transcription.candidate_strategy == "single_gemini"
     assert deps.transcription.auto_format is True
     assert deps.editing.remove_fillers is True
+    assert deps.transcription.model_name == "gemini-3.1-flash-lite-preview"
+    assert deps.transcription.transcription_thinking_level == "low"
+    assert deps.transcription.judge_thinking_level == "medium"
+    deps.cleanup()
+
+
+def test_app_deps_from_config_accepts_legacy_thinking_level_alias() -> None:
+    deps = AppDeps.from_config(
+        api_key="test-key",
+        thinking_level="low",
+    )
+    assert deps.transcription.transcription_thinking_level == "low"
+    assert deps.transcription.judge_thinking_level == "medium"
     deps.cleanup()
 
 
@@ -212,26 +267,24 @@ def test_app_deps_from_config_accepts_legacy_orchestrator_flag() -> None:
     deps.cleanup()
 
 
-def test_app_deps_from_streamlit_reads_typed_app_state(monkeypatch) -> None:
+def test_build_app_deps_from_streamlit_reads_typed_app_state() -> None:
     session_state = SimpleNamespace(
         api_key="test-key",
-        app_state=AppState(
-            model_name="gemini-3.1-pro-preview",
-            judge_model_name="gemini-3-flash-preview",
-            candidate_strategy="single_gemini",
-            use_judge_pipeline=False,
-            auto_format=False,
-            remove_fillers=True,
-        ),
+        model_name="gemini-3.1-pro-preview",
+        judge_model_name="gemini-3-flash-preview",
+        candidate_strategy="single_gemini",
+        use_judge_pipeline=False,
+        auto_format=False,
+        remove_fillers=True,
+        transcription_thinking_level="medium",
+        judge_thinking_level="low",
     )
-    monkeypatch.setattr(
-        dependencies_module.st,
-        "session_state",
-        session_state,
-        raising=False,
+    st_module = SimpleNamespace(
+        session_state=session_state,
+        secrets={},
     )
 
-    deps = AppDeps.from_streamlit()
+    deps = build_app_deps_from_streamlit(st_module)
 
     assert deps is not None
     assert deps.transcription.model_name == "gemini-3.1-pro-preview"
@@ -240,4 +293,19 @@ def test_app_deps_from_streamlit_reads_typed_app_state(monkeypatch) -> None:
     assert deps.transcription.use_judge_pipeline is False
     assert deps.transcription.auto_format is False
     assert deps.transcription.remove_fillers is True
+    assert deps.transcription.transcription_thinking_level == "medium"
+    assert deps.transcription.judge_thinking_level == "low"
     deps.cleanup()
+
+
+def test_build_app_deps_from_streamlit_returns_none_without_streamlit(
+    monkeypatch,
+) -> None:
+    def raise_import_error(name: str):
+        if name == "streamlit":
+            raise ImportError("streamlit is not installed")
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr("streamlit_deps.importlib.import_module", raise_import_error)
+
+    assert build_app_deps_from_streamlit() is None

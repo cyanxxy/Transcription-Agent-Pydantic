@@ -9,16 +9,26 @@ import os
 import tempfile
 from pathlib import Path
 import logging
-import streamlit as st
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_GEMINI_MODELS = {
     "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview",
     "gemini-3.1-pro-preview",
 }
 GEMINI_MODEL_ALIASES = {
     "gemini-3-pro-preview": "gemini-3.1-pro-preview",
+}
+GEMINI_MODEL_LABELS = {
+    "gemini-3-flash-preview": "Gemini 3 Flash",
+    "gemini-3.1-flash-lite-preview": "Gemini 3.1 Flash-Lite",
+    "gemini-3.1-pro-preview": "Gemini 3.1 Pro",
+}
+GEMINI_MODEL_THINKING_LEVELS = {
+    "gemini-3-flash-preview": {"minimal", "low", "medium", "high"},
+    "gemini-3.1-flash-lite-preview": {"minimal", "low", "medium", "high"},
+    "gemini-3.1-pro-preview": {"low", "medium", "high"},
 }
 SUPPORTED_CANDIDATE_STRATEGIES = {
     "single_gemini",
@@ -26,15 +36,27 @@ SUPPORTED_CANDIDATE_STRATEGIES = {
     "gemini_plus_parakeet",
 }
 
-FLASH_THINKING_LEVELS = {"minimal", "low", "medium", "high"}
-PRO_THINKING_LEVELS = {"low", "high"}
-
 
 def normalize_gemini_model_name(model_name: str) -> str:
     """Accept optional provider prefixes and return the bare Gemini model name."""
     if model_name.startswith("google-gla:"):
         model_name = model_name.split(":", 1)[1]
     return GEMINI_MODEL_ALIASES.get(model_name, model_name)
+
+
+def format_gemini_model_label(model_name: str) -> str:
+    """Return a human-friendly label for a supported Gemini model."""
+    return GEMINI_MODEL_LABELS.get(model_name, f"Gemini {model_name}")
+
+
+def resolve_dual_gemini_secondary_model(primary_model: str) -> str:
+    """Return the secondary Gemini model for dual-candidate transcription."""
+    secondary_models = {
+        "gemini-3-flash-preview": "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-lite-preview": "gemini-3-flash-preview",
+        "gemini-3.1-pro-preview": "gemini-3-flash-preview",
+    }
+    return secondary_models.get(primary_model, "gemini-3-flash-preview")
 
 
 @dataclass
@@ -53,9 +75,8 @@ class TranscriptionDeps:
     )
 
     # Gemini 3 specific settings
-    thinking_level: str = (
-        "high"  # Options: "minimal", "low", "medium" (Flash only), "high"
-    )
+    transcription_thinking_level: str = "high"
+    judge_thinking_level: str = "medium"
     max_output_tokens: int = 65536  # 65K tokens output limit
 
     # Chunking settings
@@ -92,17 +113,16 @@ class TranscriptionDeps:
                 f"Supported strategies: {sorted(SUPPORTED_CANDIDATE_STRATEGIES)}"
             )
 
-        if self.thinking_level not in FLASH_THINKING_LEVELS:
-            raise ValueError(
-                f"Invalid thinking_level: {self.thinking_level}. "
-                f"Allowed: {sorted(FLASH_THINKING_LEVELS)}"
-            )
-
-        if "-pro" in self.model_name and self.thinking_level not in PRO_THINKING_LEVELS:
-            raise ValueError(
-                f"thinking_level '{self.thinking_level}' is not supported by {self.model_name}. "
-                f"Allowed: {sorted(PRO_THINKING_LEVELS)}"
-            )
+        self.transcription_thinking_level = self._validate_thinking_level(
+            field_name="transcription_thinking_level",
+            model_name=self.model_name,
+            thinking_level=self.transcription_thinking_level,
+        )
+        self.judge_thinking_level = self._validate_thinking_level(
+            field_name="judge_thinking_level",
+            model_name=self.judge_model_name,
+            thinking_level=self.judge_thinking_level,
+        )
 
         if self.chunk_duration_ms <= 0:
             raise ValueError("chunk_duration_ms must be > 0")
@@ -114,27 +134,45 @@ class TranscriptionDeps:
         # Create temp directory if it doesn't exist
         Path(self.temp_dir).mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _validate_thinking_level(
+        field_name: str, model_name: str, thinking_level: str
+    ) -> str:
+        allowed_levels = GEMINI_MODEL_THINKING_LEVELS.get(model_name)
+        if allowed_levels is None:
+            raise ValueError(
+                f"Unsupported model for {field_name}: {model_name}. "
+                f"Supported models: {sorted(SUPPORTED_GEMINI_MODELS)}"
+            )
+        if thinking_level not in allowed_levels:
+            raise ValueError(
+                f"Invalid {field_name}: {thinking_level}. "
+                f"Allowed for {model_name}: {sorted(allowed_levels)}"
+            )
+        return thinking_level
+
+    @property
+    def thinking_level(self) -> str:
+        """Compatibility alias for legacy callers."""
+        return self.transcription_thinking_level
+
     def resolve_candidate_specs(self) -> List[Dict[str, str]]:
         """Return the configured transcript candidate plan for the judge pipeline."""
         specs = [
             {
                 "candidate_id": self.model_name.replace("-", "_"),
-                "label": f"Gemini {self.model_name}",
+                "label": format_gemini_model_label(self.model_name),
                 "kind": "gemini",
                 "model_name": self.model_name,
             }
         ]
 
         if self.candidate_strategy == "dual_gemini":
-            secondary_model = (
-                "gemini-3.1-pro-preview"
-                if self.model_name != "gemini-3.1-pro-preview"
-                else "gemini-3-flash-preview"
-            )
+            secondary_model = resolve_dual_gemini_secondary_model(self.model_name)
             specs.append(
                 {
                     "candidate_id": secondary_model.replace("-", "_"),
-                    "label": f"Gemini {secondary_model}",
+                    "label": format_gemini_model_label(secondary_model),
                     "kind": "gemini",
                     "model_name": secondary_model,
                 }
@@ -287,10 +325,20 @@ class AppDeps:
         - remove_fillers: Remove filler words
         - use_judge_pipeline: Enable multi-agent judge pipeline
         - parakeet_model: NeMo model used for Parakeet candidates/alignment
+        - transcription_thinking_level: thinking level for transcription candidates
+        - judge_thinking_level: thinking level for judge selection
 
         Note: Post-judge timestamp alignment is only applied when the pipeline
         detects that the judged transcript needs it.
         """
+        legacy_thinking_level = kwargs.pop("thinking_level", None)
+        transcription_thinking_level = kwargs.pop("transcription_thinking_level", None)
+        judge_thinking_level = kwargs.pop("judge_thinking_level", None)
+        if transcription_thinking_level is None:
+            transcription_thinking_level = legacy_thinking_level or "high"
+        if judge_thinking_level is None:
+            judge_thinking_level = "medium"
+
         # Extract transcription-specific kwargs
         transcription_kwargs = {
             k: v
@@ -304,70 +352,23 @@ class AppDeps:
                 "remove_fillers",
                 "use_judge_pipeline",
                 "parakeet_model",
-                "thinking_level",
                 "max_file_size_mb",
                 "chunk_duration_ms",
                 "chunk_overlap_ms",
                 "preserve_context",
+                "transcription_thinking_level",
+                "judge_thinking_level",
             ]
         }
         if "use_orchestrator" in kwargs and "use_judge_pipeline" not in kwargs:
             transcription_kwargs["use_judge_pipeline"] = kwargs["use_orchestrator"]
+        transcription_kwargs.setdefault(
+            "transcription_thinking_level", transcription_thinking_level
+        )
+        transcription_kwargs.setdefault("judge_thinking_level", judge_thinking_level)
         transcription = TranscriptionDeps(api_key=api_key, **transcription_kwargs)
         editing = EditingDeps(remove_fillers=transcription.remove_fillers)
         return cls(transcription=transcription, editing=editing)
-
-    @classmethod
-    def from_streamlit(cls) -> Optional["AppDeps"]:
-        """Create dependencies from Streamlit session state"""
-        # Try to get API key from session state or secrets
-        api_key = None
-
-        # Check session state first
-        if hasattr(st.session_state, "api_key"):
-            api_key = st.session_state.api_key
-
-        # Then check secrets
-        if not api_key and hasattr(st, "secrets"):
-            api_key = st.secrets.get("GOOGLE_API_KEY") or st.secrets.get(
-                "GEMINI_API_KEY"
-            )
-
-        # Finally check environment
-        if not api_key:
-            api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get(
-                "GEMINI_API_KEY"
-            )
-
-        if not api_key:
-            return None
-
-        app_state = getattr(st.session_state, "app_state", None)
-
-        def _session_value(name: str, default):
-            if hasattr(st.session_state, name):
-                return getattr(st.session_state, name)
-            if app_state is not None and hasattr(app_state, name):
-                return getattr(app_state, name)
-            return default
-
-        # Get other settings from session state
-        model_name = _session_value("model_name", "gemini-3-flash-preview")
-        judge_model_name = _session_value("judge_model_name", "gemini-3.1-pro-preview")
-        candidate_strategy = _session_value("candidate_strategy", "dual_gemini")
-        auto_format = _session_value("auto_format", True)
-        remove_fillers = _session_value("remove_fillers", False)
-        use_judge_pipeline = _session_value("use_judge_pipeline", True)
-
-        return cls.from_config(
-            api_key=api_key,
-            model_name=model_name,
-            judge_model_name=judge_model_name,
-            candidate_strategy=candidate_strategy,
-            auto_format=auto_format,
-            remove_fillers=remove_fillers,
-            use_judge_pipeline=use_judge_pipeline,
-        )
 
     def cleanup(self):
         """Clean up all resources"""

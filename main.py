@@ -19,6 +19,7 @@ from state_manager import StateManager  # noqa: E402
 from models import ProcessingStatus  # noqa: E402
 from styles import apply_custom_styles  # noqa: E402
 from utils import run_async  # noqa: E402
+from streamlit_deps import build_app_deps_from_streamlit  # noqa: E402
 
 # Configure logging
 logging.basicConfig(
@@ -58,13 +59,28 @@ def _esc(text: str) -> str:
 
 def _get_workflow(**kwargs) -> TranscriptionWorkflow:
     """Get or create a cached TranscriptionWorkflow from session state."""
-    api_key = StateManager.get_api_key() or ""
-    model_name = StateManager.get_model_name()
-    judge_model_name = StateManager.get_judge_model_name()
-    candidate_strategy = StateManager.get_candidate_strategy()
-    auto_format = StateManager.get_auto_format()
-    remove_fillers = StateManager.get_remove_fillers()
-    use_judge_pipeline = StateManager.get_use_judge_pipeline()
+    app_deps = build_app_deps_from_streamlit(st)
+    if app_deps is not None:
+        transcription = app_deps.transcription
+        api_key = transcription.api_key
+        model_name = transcription.model_name
+        judge_model_name = transcription.judge_model_name
+        candidate_strategy = transcription.candidate_strategy
+        auto_format = transcription.auto_format
+        remove_fillers = transcription.remove_fillers
+        use_judge_pipeline = transcription.use_judge_pipeline
+        transcription_thinking_level = transcription.transcription_thinking_level
+        judge_thinking_level = transcription.judge_thinking_level
+    else:
+        api_key = StateManager.get_api_key() or ""
+        model_name = StateManager.get_model_name()
+        judge_model_name = StateManager.get_judge_model_name()
+        candidate_strategy = StateManager.get_candidate_strategy()
+        auto_format = StateManager.get_auto_format()
+        remove_fillers = StateManager.get_remove_fillers()
+        use_judge_pipeline = StateManager.get_use_judge_pipeline()
+        transcription_thinking_level = "high"
+        judge_thinking_level = "medium"
 
     cache_key = (
         api_key,
@@ -74,6 +90,8 @@ def _get_workflow(**kwargs) -> TranscriptionWorkflow:
         auto_format,
         remove_fillers,
         use_judge_pipeline,
+        transcription_thinking_level,
+        judge_thinking_level,
     )
 
     if (
@@ -90,6 +108,8 @@ def _get_workflow(**kwargs) -> TranscriptionWorkflow:
         auto_format=auto_format,
         remove_fillers=remove_fillers,
         use_judge_pipeline=use_judge_pipeline,
+        transcription_thinking_level=transcription_thinking_level,
+        judge_thinking_level=judge_thinking_level,
         **kwargs,
     )
     st.session_state.workflow = workflow
@@ -362,8 +382,9 @@ def render_sidebar():
         st.markdown("### Model")
 
         model_options = {
-            "Flash (Fast)": "gemini-3-flash-preview",
-            "3.1 Pro (Quality)": "gemini-3.1-pro-preview",
+            "Flash (Balanced)": "gemini-3-flash-preview",
+            "3.1 Flash-Lite (Fastest/Cheapest)": "gemini-3.1-flash-lite-preview",
+            "3.1 Pro (Judge/Quality)": "gemini-3.1-pro-preview",
         }
 
         current_model = StateManager.get_model_name()
@@ -431,13 +452,15 @@ def render_sidebar():
                 options=list(strategy_options.keys()),
                 index=strategy_values.index(current_strategy),
                 help="Primary model comes from the Model selector above. "
-                "Dual Gemini adds the other Gemini model. "
+                "Dual Gemini pairs Flash with Flash-Lite, and pairs Pro with Flash. "
                 "Gemini + Parakeet uses Parakeet as the second candidate.",
             )
             selected_strategy_value = strategy_options[selected_strategy]
             st.session_state.candidate_strategy = selected_strategy_value
             StateManager.set_candidate_strategy(selected_strategy_value)
-            st.caption("Judge agent runs on Gemini 3.1 Pro by default.")
+            st.caption(
+                "Judge agent runs on Gemini 3.1 Pro by default; Flash-Lite is the low-cost secondary candidate."
+            )
         else:
             st.session_state.candidate_strategy = "single_gemini"
             StateManager.set_candidate_strategy("single_gemini")
