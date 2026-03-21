@@ -1,3 +1,7 @@
+from types import SimpleNamespace
+from typing import List, Optional
+
+from pydantic_ai import AudioUrl
 from models import TranscriptSegment
 from agents.transcription_agent import (
     adjust_timestamp,
@@ -6,6 +10,7 @@ from agents.transcription_agent import (
     build_transcription_prompt,
     process_audio_file,
     merge_chunks,
+    run_transcription_agent,
     _detect_overlap_boundary,
 )
 from dependencies import TranscriptionDeps
@@ -153,6 +158,87 @@ def test_prompt_with_previous_context() -> None:
     prompt = build_transcription_prompt(None, "Previous speaker said hello", None, None)
     assert "PREVIOUS CONTEXT" in prompt
     assert "Previous speaker said hello" in prompt
+
+
+class FakeFilesClient:
+    def __init__(self) -> None:
+        self.upload_calls: list[str] = []
+        self.delete_calls: list[str] = []
+
+    async def upload(self, *, file, config=None):
+        del config
+        self.upload_calls.append(str(file))
+        return SimpleNamespace(
+            uri="https://example.com/audio.wav",
+            mime_type="audio/wav",
+            name="files/123",
+        )
+
+    async def delete(self, *, name, config=None):
+        del config
+        self.delete_calls.append(name)
+        return SimpleNamespace()
+
+
+class FakeAgent:
+    def __init__(
+        self,
+        files_client: FakeFilesClient,
+        output: Optional[List[TranscriptSegment]] = None,
+        exc: Optional[Exception] = None,
+    ) -> None:
+        self.model = SimpleNamespace(
+            client=SimpleNamespace(aio=SimpleNamespace(files=files_client))
+        )
+        self.output = output
+        self.exc = exc
+        self.inputs: list[list[object]] = []
+
+    async def run(self, inputs, deps, model_settings, usage_limits):
+        del deps, model_settings, usage_limits
+        self.inputs.append(inputs)
+        if self.exc is not None:
+            raise self.exc
+        return SimpleNamespace(output=self.output)
+
+
+@pytest.mark.asyncio
+async def test_run_transcription_agent_uploads_audio_url_and_deletes_file(
+    tmp_path,
+) -> None:
+    file_path = tmp_path / "audio.wav"
+    file_path.write_bytes(b"fake")
+    deps = TranscriptionDeps(api_key="test-key")
+    files_client = FakeFilesClient()
+    agent = FakeAgent(files_client, output=[_seg("[00:00:00]", "Speaker 1", "hello")])
+
+    try:
+        segments = await run_transcription_agent(agent, deps, str(file_path))
+    finally:
+        deps.cleanup()
+
+    assert segments == [_seg("[00:00:00]", "Speaker 1", "hello")]
+    assert files_client.upload_calls == [str(file_path)]
+    assert files_client.delete_calls == ["files/123"]
+    assert isinstance(agent.inputs[0][1], AudioUrl)
+
+
+@pytest.mark.asyncio
+async def test_run_transcription_agent_deletes_uploaded_file_on_failure(tmp_path) -> None:
+    file_path = tmp_path / "audio.wav"
+    file_path.write_bytes(b"fake")
+    deps = TranscriptionDeps(api_key="test-key")
+    files_client = FakeFilesClient()
+    agent = FakeAgent(files_client, exc=RuntimeError("boom"))
+
+    try:
+        with pytest.raises(RuntimeError, match="boom"):
+            await run_transcription_agent(agent, deps, str(file_path))
+    finally:
+        deps.cleanup()
+
+    assert files_client.upload_calls == [str(file_path)]
+    assert files_client.delete_calls == ["files/123"]
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from models import (
     AudioMetadata,
     JudgeDecision,
     TranscriptQuality,
+    TranscriptResult,
     TranscriptCandidate,
     TranscriptSegment,
 )
@@ -137,7 +138,7 @@ async def test_run_candidate_spec_uses_transcription_thinking_level(
     workflow_fixture.deps = AppDeps.from_config(
         api_key="test-key",
         transcription_thinking_level="minimal",
-        judge_thinking_level="medium",
+        judge_thinking_level="low",
     )
     workflow_fixture._run_transcription_deps = workflow_fixture.deps.transcription
     captured: dict[str, str] = {}
@@ -307,8 +308,11 @@ async def test_transcribe_audio_reuses_workflow_with_run_scoped_temp_dirs(
         del self, audio_path, metadata, progress_callback, custom_prompt, speaker_names
         return [_segment("hello")]
 
-    async def fake_calculate_quality(self, segments):
+    quality_durations: list[float | None] = []
+
+    async def fake_calculate_quality(self, segments, audio_duration=None):
         del self, segments
+        quality_durations.append(audio_duration)
         return TranscriptQuality(
             overall_score=80,
             readability=80,
@@ -339,5 +343,54 @@ async def test_transcribe_audio_reuses_workflow_with_run_scoped_temp_dirs(
 
         assert len(run_temp_dirs) == 2
         assert first_temp_dir != second_temp_dir
+        assert quality_durations == [30, 30]
     finally:
         workflow.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_edit_transcript_recalculates_quality_with_metadata_duration(
+    workflow_fixture, monkeypatch
+) -> None:
+    captured: dict[str, float | None] = {}
+
+    async def fake_calculate_quality(self, segments, audio_duration=None):
+        del self, segments
+        captured["audio_duration"] = audio_duration
+        return TranscriptQuality(
+            overall_score=82,
+            readability=80,
+            punctuation_density=0.05,
+            sentence_variety=70,
+            vocabulary_richness=75,
+        )
+
+    monkeypatch.setattr(
+        TranscriptionWorkflow,
+        "_calculate_quality",
+        fake_calculate_quality,
+    )
+
+    result = TranscriptResult(
+        segments=[_segment("hello world")],
+        metadata=AudioMetadata(
+            filename="upload.wav",
+            duration=45,
+            size_mb=1,
+            format=AudioFormat.WAV,
+        ),
+        quality=TranscriptQuality(
+            overall_score=50,
+            readability=50,
+            punctuation_density=0.05,
+            sentence_variety=50,
+            vocabulary_richness=50,
+        ),
+        processing_time=1.0,
+        model_used="gemini-3-flash-preview",
+    )
+
+    edited_result = await workflow_fixture.edit_transcript(result, "fix_capitalization")
+
+    assert captured["audio_duration"] == 45
+    assert edited_result.quality.overall_score == 82

@@ -60,7 +60,7 @@ def build_app_deps_from_streamlit(st_module: Any | None = None) -> Optional[AppD
         "transcription_thinking_level",
         _session_value(st_module, "thinking_level", "high"),
     )
-    judge_thinking_level = _session_value(st_module, "judge_thinking_level", "medium")
+    judge_thinking_level = _session_value(st_module, "judge_thinking_level", "high")
 
     return AppDeps.from_config(
         api_key=api_key,

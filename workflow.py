@@ -197,7 +197,7 @@ class TranscriptionWorkflow:
                 # Calculate quality metrics
                 if progress_callback:
                     progress_callback("Analyzing quality...", 0.8)
-                quality = await self._calculate_quality(segments)
+                quality = await self._calculate_quality(segments, metadata.duration)
                 timestamps_corrected = False  # Direct mode doesn't use Parakeet
 
             # Step 6: Create final result
@@ -304,6 +304,11 @@ class TranscriptionWorkflow:
                 previous_context,
                 speaker_names,
                 chunk_label,
+                (
+                    (unit_info["duration_ms"] / 1000.0)
+                    if metadata.needs_chunking
+                    else metadata.duration
+                ),
             )
             judged_chunks.append(unit_result.final_segments)
             selected_candidate_ids.extend(unit_result.selected_candidate_ids)
@@ -343,7 +348,11 @@ class TranscriptionWorkflow:
         else:
             final_segments = judged_chunks[0] if judged_chunks else []
 
-        candidates = await self._merge_candidate_chunks(candidate_chunks, speaker_names)
+        candidates = await self._merge_candidate_chunks(
+            candidate_chunks,
+            speaker_names,
+            metadata.duration,
+        )
 
         if speaker_names and final_segments:
             final_segments = map_speakers_to_context(final_segments, speaker_names)
@@ -354,7 +363,7 @@ class TranscriptionWorkflow:
         judge_notes.extend(timestamp_notes)
 
         if final_segments:
-            quality = await self._calculate_quality(final_segments)
+            quality = await self._calculate_quality(final_segments, metadata.duration)
             if judge_notes:
                 quality = quality.model_copy(
                     update={"warnings": quality.warnings + judge_notes}
@@ -395,6 +404,7 @@ class TranscriptionWorkflow:
         previous_context: Optional[str],
         speaker_names: Optional[List[str]],
         chunk_label: str,
+        audio_duration: Optional[float] = None,
     ) -> JudgedUnitResult:
         """Generate candidates for one audio span and judge them."""
         candidates = await self._generate_candidates(
@@ -403,6 +413,7 @@ class TranscriptionWorkflow:
             custom_prompt,
             previous_context,
             speaker_names,
+            audio_duration,
         )
         valid_candidates = [candidate for candidate in candidates if candidate.segments]
 
@@ -448,6 +459,7 @@ class TranscriptionWorkflow:
         custom_prompt: Optional[str],
         previous_context: Optional[str],
         speaker_names: Optional[List[str]],
+        audio_duration: Optional[float] = None,
     ) -> List[TranscriptCandidate]:
         """Run the configured candidate transcription plan for one audio span."""
         specs = self.active_transcription_deps.resolve_candidate_specs()
@@ -459,6 +471,7 @@ class TranscriptionWorkflow:
                 custom_prompt,
                 previous_context,
                 speaker_names,
+                audio_duration,
             )
             for spec in specs
         ]
@@ -472,6 +485,7 @@ class TranscriptionWorkflow:
         custom_prompt: Optional[str],
         previous_context: Optional[str],
         speaker_names: Optional[List[str]],
+        audio_duration: Optional[float] = None,
     ) -> TranscriptCandidate:
         """Execute a single candidate transcription run."""
         notes: List[str] = []
@@ -519,7 +533,7 @@ class TranscriptionWorkflow:
 
         quality_score = None
         if segments:
-            candidate_quality = await self._calculate_quality(segments)
+            candidate_quality = await self._calculate_quality(segments, audio_duration)
             quality_score = candidate_quality.overall_score
 
         return TranscriptCandidate(
@@ -536,6 +550,7 @@ class TranscriptionWorkflow:
         self,
         candidate_chunks: Dict[str, Dict[str, Any]],
         speaker_names: Optional[List[str]],
+        audio_duration: Optional[float] = None,
     ) -> List[TranscriptCandidate]:
         """Merge per-chunk candidates back into full-audio candidates."""
         merged_candidates = []
@@ -559,7 +574,10 @@ class TranscriptionWorkflow:
 
             quality_score = None
             if merged_segments:
-                candidate_quality = await self._calculate_quality(merged_segments)
+                candidate_quality = await self._calculate_quality(
+                    merged_segments,
+                    audio_duration,
+                )
                 quality_score = candidate_quality.overall_score
 
             merged_candidates.append(
@@ -718,7 +736,9 @@ class TranscriptionWorkflow:
         return merged_segments
 
     async def _calculate_quality(
-        self, segments: List[TranscriptSegment]
+        self,
+        segments: List[TranscriptSegment],
+        audio_duration: Optional[float] = None,
     ) -> TranscriptQuality:
         """Calculate quality metrics for transcript"""
 
@@ -728,7 +748,11 @@ class TranscriptionWorkflow:
         )
 
         # Calculate metrics
-        metrics = calculate_quality_metrics(self.deps.quality, segments)
+        metrics = calculate_quality_metrics(
+            self.deps.quality,
+            segments,
+            audio_duration,
+        )
 
         # Calculate overall score
         overall_score = calculate_overall_score(self.deps.quality, metrics)
@@ -806,7 +830,10 @@ class TranscriptionWorkflow:
 
         # Recalculate quality after editing
         if result.edited:
-            result.quality = await self._calculate_quality(result.segments)
+            result.quality = await self._calculate_quality(
+                result.segments,
+                result.metadata.duration,
+            )
 
         return result
 

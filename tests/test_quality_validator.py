@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+from typing import cast
+
 from models import TranscriptSegment
 from dependencies import QualityDeps
 from agents.quality_validator import (
@@ -134,8 +137,32 @@ def test_timestamp_coverage_all_valid() -> None:
     assert calculate_timestamp_coverage(segments) == 100.0
 
 
+def test_timestamp_coverage_without_duration_preserves_validity_ratio() -> None:
+    segments = [
+        _seg("[00:00:00]", "A", "Hello"),
+        cast(
+            TranscriptSegment,
+            SimpleNamespace(timestamp="invalid", speaker="A", text="World"),
+        ),
+    ]
+    assert calculate_timestamp_coverage(segments) == 50.0
+
+
 def test_timestamp_coverage_empty() -> None:
     assert calculate_timestamp_coverage([]) == 0.0
+
+
+def test_timestamp_coverage_with_duration_repeated_zero_not_full() -> None:
+    segments = [
+        _seg("[00:00:00]", "A", "Hello"),
+        _seg("[00:00:00]", "A", "World"),
+    ]
+    assert calculate_timestamp_coverage(segments, audio_duration=60.0) == 0.0
+
+
+def test_timestamp_coverage_single_segment_at_zero_is_full_when_duration_known() -> None:
+    segments = [_seg("[00:00:00]", "A", "Hello world")]
+    assert calculate_timestamp_coverage(segments, audio_duration=60.0) == 100.0
 
 
 # --- calculate_speaker_consistency ---

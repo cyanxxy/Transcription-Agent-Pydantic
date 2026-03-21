@@ -80,7 +80,7 @@ def _get_workflow(**kwargs) -> TranscriptionWorkflow:
         remove_fillers = StateManager.get_remove_fillers()
         use_judge_pipeline = StateManager.get_use_judge_pipeline()
         transcription_thinking_level = "high"
-        judge_thinking_level = "medium"
+        judge_thinking_level = "high"
 
     cache_key = (
         api_key,

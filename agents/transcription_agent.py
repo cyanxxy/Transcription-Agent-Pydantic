@@ -3,7 +3,7 @@ Transcription Agent using Pydantic AI
 Handles audio processing and transcription with Google Gemini
 """
 
-from pydantic_ai import Agent, BinaryContent
+from pydantic_ai import Agent, AudioUrl
 from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.usage import UsageLimits
@@ -206,32 +206,35 @@ async def run_transcription_agent(
     speaker_names: Optional[List[str]] = None,
 ) -> List[TranscriptSegment]:
     """Transcribe audio file or chunk using the configured Pydantic AI agent"""
-
-    async with aiofiles.open(audio_path, "rb") as audio_file:
-        audio_bytes = await audio_file.read()
-
-    media_type = _guess_media_type(audio_path)
-
-    # Validate content type
-    content = BinaryContent(data=audio_bytes, media_type=media_type)
-    if not content.is_audio:
-        logger.warning(f"Content may not be audio: {media_type}")
-
     prompt = build_transcription_prompt(
         custom_prompt, previous_context, chunk_info, speaker_names
     )
-
     model_settings = _build_google_settings(deps)
+    uploaded_name: Optional[str] = None
 
     logger.info(f"Running transcription agent for {audio_path}")
-    result = await agent.run(
-        [prompt, content],
-        deps=deps,
-        model_settings=model_settings,
-        usage_limits=UsageLimits(request_limit=5),
-    )
+    try:
+        uploaded_file = await _upload_audio_file_for_gemini(agent, audio_path)
+        uploaded_name = getattr(uploaded_file, "name", None)
+        uploaded_uri = getattr(uploaded_file, "uri", None)
+        if not uploaded_uri:
+            raise ValueError("Google Files API upload did not return a file URI")
 
-    segments: List[TranscriptSegment] = result.output or []
+        media_type = getattr(uploaded_file, "mime_type", None) or _guess_media_type(
+            audio_path
+        )
+        content = AudioUrl(url=uploaded_uri, media_type=media_type)
+
+        result = await agent.run(
+            [prompt, content],
+            deps=deps,
+            model_settings=model_settings,
+            usage_limits=UsageLimits(request_limit=5),
+        )
+        segments: List[TranscriptSegment] = result.output or []
+    finally:
+        if uploaded_name:
+            await _delete_uploaded_audio_file(agent, uploaded_name)
 
     # Warn if transcription returned empty
     if not segments:
@@ -254,6 +257,46 @@ async def run_transcription_agent(
 
     logger.info(f"Transcribed {len(segments)} segments via agent")
     return segments
+
+
+async def _upload_audio_file_for_gemini(
+    agent: Agent[TranscriptionDeps, List[TranscriptSegment]],
+    audio_path: str,
+):
+    """Upload audio through the Google Files API for Gemini requests."""
+    files_client = _get_google_files_client(agent)
+    return await files_client.upload(file=audio_path)
+
+
+async def _delete_uploaded_audio_file(
+    agent: Agent[TranscriptionDeps, List[TranscriptSegment]],
+    uploaded_name: str,
+) -> None:
+    """Best-effort cleanup for uploaded Google files."""
+    try:
+        files_client = _get_google_files_client(agent)
+        await files_client.delete(name=uploaded_name)
+    except Exception as exc:
+        logger.warning(
+            "Failed to delete uploaded Google file %s: %s",
+            uploaded_name,
+            exc,
+        )
+
+
+def _get_google_files_client(
+    agent: Agent[TranscriptionDeps, List[TranscriptSegment]],
+):
+    """Return the async Google Files client from a Google-backed agent."""
+    model = getattr(agent, "model", None)
+    client = getattr(model, "client", None)
+    aio_client = getattr(client, "aio", None)
+    files_client = getattr(aio_client, "files", None)
+    if files_client is None:
+        raise RuntimeError(
+            "Configured transcription agent does not expose Google Files API support"
+        )
+    return files_client
 
 
 def _guess_media_type(path: str) -> str:

@@ -28,7 +28,11 @@ GEMINI_MODEL_LABELS = {
 GEMINI_MODEL_THINKING_LEVELS = {
     "gemini-3-flash-preview": {"minimal", "low", "medium", "high"},
     "gemini-3.1-flash-lite-preview": {"minimal", "low", "medium", "high"},
-    "gemini-3.1-pro-preview": {"low", "medium", "high"},
+    "gemini-3.1-pro-preview": {"low", "high"},
+}
+LEGACY_PRO_THINKING_LEVELS = {
+    "minimal": "high",
+    "medium": "high",
 }
 SUPPORTED_CANDIDATE_STRATEGIES = {
     "single_gemini",
@@ -76,7 +80,7 @@ class TranscriptionDeps:
 
     # Gemini 3 specific settings
     transcription_thinking_level: str = "high"
-    judge_thinking_level: str = "medium"
+    judge_thinking_level: str = "high"
     max_output_tokens: int = 65536  # 65K tokens output limit
 
     # Chunking settings
@@ -138,6 +142,18 @@ class TranscriptionDeps:
     def _validate_thinking_level(
         field_name: str, model_name: str, thinking_level: str
     ) -> str:
+        if model_name == "gemini-3.1-pro-preview":
+            normalized_level = LEGACY_PRO_THINKING_LEVELS.get(thinking_level)
+            if normalized_level is not None:
+                logger.info(
+                    "Coercing legacy %s=%s for %s to %s",
+                    field_name,
+                    thinking_level,
+                    model_name,
+                    normalized_level,
+                )
+                thinking_level = normalized_level
+
         allowed_levels = GEMINI_MODEL_THINKING_LEVELS.get(model_name)
         if allowed_levels is None:
             raise ValueError(
@@ -337,7 +353,7 @@ class AppDeps:
         if transcription_thinking_level is None:
             transcription_thinking_level = legacy_thinking_level or "high"
         if judge_thinking_level is None:
-            judge_thinking_level = "medium"
+            judge_thinking_level = "high"
 
         # Extract transcription-specific kwargs
         transcription_kwargs = {

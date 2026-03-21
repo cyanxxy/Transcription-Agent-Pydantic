@@ -3,7 +3,7 @@ Quality Validator using utility functions
 Analyzes and validates transcript quality
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import re
 import statistics
 import logging
@@ -15,7 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_quality_metrics(
-    deps: QualityDeps, segments: List[TranscriptSegment]
+    deps: QualityDeps,
+    segments: List[TranscriptSegment],
+    audio_duration: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Calculate comprehensive quality metrics"""
 
@@ -61,7 +63,7 @@ def calculate_quality_metrics(
     vocabulary_richness = min(100, (unique_words / max(len(words), 1)) * 200)
 
     # Timestamp coverage (check if timestamps are sequential)
-    timestamp_coverage = calculate_timestamp_coverage(segments)
+    timestamp_coverage = calculate_timestamp_coverage(segments, audio_duration)
 
     # Speaker consistency
     speaker_consistency = calculate_speaker_consistency(segments)
@@ -125,18 +127,30 @@ def calculate_overall_score(deps: QualityDeps, metrics: Dict[str, float]) -> flo
     return min(100, max(0, overall_score))
 
 
-def calculate_timestamp_coverage(segments: List[TranscriptSegment]) -> float:
+def calculate_timestamp_coverage(
+    segments: List[TranscriptSegment], audio_duration: Optional[float] = None
+) -> float:
     """Calculate how well timestamps cover the transcript"""
 
     if not segments:
         return 0.0
 
-    valid_timestamps = sum(
-        1 for seg in segments if re.match(r"^\[\d{2}:\d{2}:\d{2}\]$", seg.timestamp)
-    )
+    parsed_timestamps = [
+        parse_timestamp_to_seconds(seg.timestamp)
+        for seg in segments
+        if re.match(r"^\[\d{2}:\d{2}:\d{2}\]$", seg.timestamp)
+    ]
+    valid_ratio = (len(parsed_timestamps) / len(segments)) * 100
 
-    coverage = (valid_timestamps / len(segments)) * 100
-    return coverage
+    if audio_duration is None or audio_duration <= 0:
+        return valid_ratio
+    if not parsed_timestamps:
+        return 0.0
+    if len(segments) == 1 and len(parsed_timestamps) == 1 and parsed_timestamps[0] == 0:
+        return 100.0
+
+    coverage = min(100.0, max(0.0, (parsed_timestamps[-1] / audio_duration) * 100))
+    return min(coverage, valid_ratio)
 
 
 def calculate_speaker_consistency(segments: List[TranscriptSegment]) -> float:

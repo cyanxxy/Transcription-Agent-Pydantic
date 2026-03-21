@@ -25,13 +25,13 @@ def test_chunk_overlap_validation() -> None:
         )
 
 
-def test_thinking_level_validation_for_pro() -> None:
+def test_pro_rejects_unknown_thinking_level() -> None:
     with pytest.raises(ValueError):
         TranscriptionDeps(
             api_key="test-key",
             model_name="gemini-3.1-pro-preview",
-            transcription_thinking_level="minimal",
-            judge_thinking_level="medium",
+            transcription_thinking_level="ultra",
+            judge_thinking_level="low",
         )
 
 
@@ -41,7 +41,7 @@ def test_valid_flash_defaults() -> None:
     assert deps.judge_model_name == "gemini-3.1-pro-preview"
     assert deps.candidate_strategy == "dual_gemini"
     assert deps.transcription_thinking_level == "high"
-    assert deps.judge_thinking_level == "medium"
+    assert deps.judge_thinking_level == "high"
     assert deps.thinking_level == "high"
     assert deps.chunk_duration_ms == 120000
     assert deps.chunk_overlap_ms == 5000
@@ -54,11 +54,11 @@ def test_valid_pro_creation() -> None:
     deps = TranscriptionDeps(
         api_key="test-key",
         model_name="gemini-3.1-pro-preview",
-        transcription_thinking_level="medium",
+        transcription_thinking_level="low",
         judge_thinking_level="high",
     )
     assert deps.model_name == "gemini-3.1-pro-preview"
-    assert deps.transcription_thinking_level == "medium"
+    assert deps.transcription_thinking_level == "low"
     assert deps.judge_thinking_level == "high"
 
 
@@ -66,6 +66,7 @@ def test_valid_flash_lite_creation() -> None:
     deps = TranscriptionDeps(
         api_key="test-key",
         model_name="gemini-3.1-flash-lite-preview",
+        judge_model_name="gemini-3.1-flash-lite-preview",
         transcription_thinking_level="minimal",
         judge_thinking_level="medium",
     )
@@ -74,14 +75,27 @@ def test_valid_flash_lite_creation() -> None:
     assert deps.judge_thinking_level == "medium"
 
 
-def test_pro_accepts_medium_thinking_level() -> None:
+def test_pro_accepts_low_and_high_thinking_levels() -> None:
     deps = TranscriptionDeps(
         api_key="test-key",
         model_name="gemini-3.1-pro-preview",
-        transcription_thinking_level="medium",
-        judge_thinking_level="medium",
+        transcription_thinking_level="high",
+        judge_thinking_level="low",
     )
-    assert deps.transcription_thinking_level == "medium"
+    assert deps.transcription_thinking_level == "high"
+    assert deps.judge_thinking_level == "low"
+
+
+def test_pro_normalizes_legacy_thinking_levels_to_high() -> None:
+    deps = TranscriptionDeps(
+        api_key="test-key",
+        model_name="gemini-3.1-pro-preview",
+        judge_model_name="gemini-3.1-pro-preview",
+        transcription_thinking_level="medium",
+        judge_thinking_level="minimal",
+    )
+    assert deps.transcription_thinking_level == "high"
+    assert deps.judge_thinking_level == "high"
 
 
 def test_normalizes_deprecated_gemini_3_pro_name() -> None:
@@ -235,7 +249,7 @@ def test_app_deps_from_config() -> None:
     assert deps.editing.remove_fillers is True
     assert deps.transcription.model_name == "gemini-3.1-flash-lite-preview"
     assert deps.transcription.transcription_thinking_level == "low"
-    assert deps.transcription.judge_thinking_level == "medium"
+    assert deps.transcription.judge_thinking_level == "high"
     deps.cleanup()
 
 
@@ -245,7 +259,7 @@ def test_app_deps_from_config_accepts_legacy_thinking_level_alias() -> None:
         thinking_level="low",
     )
     assert deps.transcription.transcription_thinking_level == "low"
-    assert deps.transcription.judge_thinking_level == "medium"
+    assert deps.transcription.judge_thinking_level == "high"
     deps.cleanup()
 
 
@@ -293,7 +307,7 @@ def test_build_app_deps_from_streamlit_reads_typed_app_state() -> None:
     assert deps.transcription.use_judge_pipeline is False
     assert deps.transcription.auto_format is False
     assert deps.transcription.remove_fillers is True
-    assert deps.transcription.transcription_thinking_level == "medium"
+    assert deps.transcription.transcription_thinking_level == "high"
     assert deps.transcription.judge_thinking_level == "low"
     deps.cleanup()
 
