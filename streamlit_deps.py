@@ -9,6 +9,9 @@ import importlib
 from typing import Any, Optional
 
 from dependencies import AppDeps
+from models import AppState
+
+DEFAULT_PARAKEET_MODEL = AppState().parakeet_model
 
 
 def _session_value(st_module: Any, name: str, default: Any) -> Any:
@@ -52,6 +55,10 @@ def build_app_deps_from_streamlit(st_module: Any | None = None) -> Optional[AppD
         st_module, "judge_model_name", "gemini-3.1-pro-preview"
     )
     candidate_strategy = _session_value(st_module, "candidate_strategy", "dual_gemini")
+    parakeet_model = (
+        _session_value(st_module, "parakeet_model", DEFAULT_PARAKEET_MODEL)
+        or DEFAULT_PARAKEET_MODEL
+    ).strip() or DEFAULT_PARAKEET_MODEL
     auto_format = _session_value(st_module, "auto_format", True)
     remove_fillers = _session_value(st_module, "remove_fillers", False)
     use_judge_pipeline = _session_value(st_module, "use_judge_pipeline", True)
@@ -67,6 +74,7 @@ def build_app_deps_from_streamlit(st_module: Any | None = None) -> Optional[AppD
         model_name=model_name,
         judge_model_name=judge_model_name,
         candidate_strategy=candidate_strategy,
+        parakeet_model=parakeet_model,
         auto_format=auto_format,
         remove_fillers=remove_fillers,
         use_judge_pipeline=use_judge_pipeline,

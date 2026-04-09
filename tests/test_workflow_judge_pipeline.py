@@ -82,6 +82,44 @@ async def test_run_unit_with_judge_returns_notes_when_all_candidates_are_empty(
 
 
 @pytest.mark.asyncio
+async def test_judge_pipeline_raises_when_full_audio_has_no_transcript(
+    workflow_fixture, monkeypatch
+) -> None:
+    metadata = AudioMetadata(
+        filename="test.wav",
+        duration=120,
+        size_mb=1,
+        format=AudioFormat.WAV,
+        needs_chunking=False,
+    )
+
+    async def fake_run_unit_with_judge(self, *args, **kwargs):
+        del self, args, kwargs
+        return workflow_module.JudgedUnitResult(
+            final_segments=[],
+            candidates=[],
+            selected_candidate_ids=[],
+            judge_notes=["No candidate transcription produced segments."],
+            contains_gap_marker=True,
+        )
+
+    monkeypatch.setattr(
+        TranscriptionWorkflow,
+        "_run_unit_with_judge",
+        fake_run_unit_with_judge,
+    )
+
+    with pytest.raises(RuntimeError, match="No candidate transcription produced segments"):
+        await workflow_fixture._transcribe_with_judge_pipeline(
+            "audio.wav",
+            metadata,
+            progress_callback=None,
+            custom_prompt=None,
+            speaker_names=None,
+        )
+
+
+@pytest.mark.asyncio
 async def test_run_unit_with_judge_uses_judge_decision(
     workflow_fixture, monkeypatch
 ) -> None:
@@ -273,6 +311,49 @@ async def test_review_timestamps_applies_alignment_when_recommended(
 
 
 @pytest.mark.asyncio
+async def test_review_timestamps_does_not_report_success_for_noop_alignment(
+    workflow_fixture, monkeypatch
+) -> None:
+    metadata = AudioMetadata(
+        filename="test.wav",
+        duration=120,
+        size_mb=1,
+        format=AudioFormat.WAV,
+    )
+    segments = [_segment("hello")]
+
+    monkeypatch.setattr(
+        workflow_module,
+        "analyze_timestamp_quality",
+        lambda segments, audio_duration: {
+            "reason": "Timestamps need correction (score: 40)",
+            "recommendation": "fix",
+        },
+    )
+
+    async def fake_fix_timestamps(deps, audio_path, segments):
+        del deps, audio_path
+        return segments
+
+    monkeypatch.setattr(
+        workflow_module,
+        "fix_timestamps_with_parakeet",
+        fake_fix_timestamps,
+    )
+
+    corrected, timestamps_corrected, notes = await workflow_fixture._review_timestamps(
+        "audio.wav",
+        metadata,
+        segments,
+    )
+
+    assert corrected == segments
+    assert timestamps_corrected is False
+    assert any(note.startswith("Timestamp review:") for note in notes)
+    assert "Applied Parakeet alignment after judging." not in notes
+
+
+@pytest.mark.asyncio
 async def test_transcribe_audio_reuses_workflow_with_run_scoped_temp_dirs(
     monkeypatch,
 ) -> None:
@@ -346,6 +427,65 @@ async def test_transcribe_audio_reuses_workflow_with_run_scoped_temp_dirs(
         assert quality_durations == [30, 30]
     finally:
         workflow.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_preserves_original_filename_in_metadata(
+    monkeypatch,
+) -> None:
+    workflow = TranscriptionWorkflow(api_key="test-key", use_judge_pipeline=False)
+
+    async def fake_validate_audio_file(deps, file_data, filename):
+        del file_data
+        return {"valid": True, "temp_path": f"{deps.temp_dir}/temp_upload.wav"}
+
+    async def fake_process_audio_file(deps, file_path):
+        del deps, file_path
+        return AudioMetadata(
+            filename="temp_upload.wav",
+            duration=30,
+            size_mb=1,
+            format=AudioFormat.WAV,
+        )
+
+    async def fake_transcribe_direct(
+        self,
+        audio_path,
+        metadata,
+        progress_callback,
+        custom_prompt,
+        speaker_names,
+    ):
+        del self, audio_path, metadata, progress_callback, custom_prompt, speaker_names
+        return [_segment("hello")]
+
+    async def fake_calculate_quality(self, segments, audio_duration=None):
+        del self, segments, audio_duration
+        return TranscriptQuality(
+            overall_score=80,
+            readability=80,
+            punctuation_density=0.05,
+            sentence_variety=70,
+            vocabulary_richness=75,
+        )
+
+    monkeypatch.setattr(
+        workflow_module, "validate_audio_file", fake_validate_audio_file
+    )
+    monkeypatch.setattr(workflow_module, "process_audio_file", fake_process_audio_file)
+    monkeypatch.setattr(
+        TranscriptionWorkflow, "_transcribe_direct", fake_transcribe_direct
+    )
+    monkeypatch.setattr(
+        TranscriptionWorkflow, "_calculate_quality", fake_calculate_quality
+    )
+
+    try:
+        result = await workflow.transcribe_audio(b"fake", "original.wav")
+    finally:
+        workflow.cleanup()
+
+    assert result.metadata.filename == "original.wav"
 
 
 @pytest.mark.asyncio

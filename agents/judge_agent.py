@@ -148,13 +148,16 @@ async def run_judge_agent(
         )
         _validate_judge_decision(result.output)
         valid_candidate_ids = {candidate.candidate_id for candidate in candidates}
+        original_selected_ids = list(result.output.selected_candidate_ids)
         result.output.selected_candidate_ids = [
             candidate_id
-            for candidate_id in result.output.selected_candidate_ids
+            for candidate_id in original_selected_ids
             if candidate_id in valid_candidate_ids
         ]
         if not result.output.selected_candidate_ids:
-            result.output.selected_candidate_ids = [candidates[0].candidate_id]
+            logger.warning(
+                "Judge returned no usable selected_candidate_ids; preserving empty selection metadata."
+            )
         logger.info(
             "Judge selected %s candidates and returned %s segments",
             len(result.output.selected_candidate_ids),

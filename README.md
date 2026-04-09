@@ -53,17 +53,19 @@ pip install -r requirements-full.txt
 
 ## Configuration
 
-Set a Gemini API key with either Streamlit secrets or environment variables.
+Set a Gemini API key with either Streamlit secrets or environment variables. The app accepts either `GOOGLE_API_KEY` or `GEMINI_API_KEY`.
 
 ```toml
 # .streamlit/secrets.toml
 GOOGLE_API_KEY = "your-key-here"
+GEMINI_API_KEY = "your-key-here"
 ```
 
 Or:
 
 ```bash
 export GOOGLE_API_KEY="your-key-here"
+export GEMINI_API_KEY="your-key-here"
 ```
 
 ## Run
@@ -93,7 +95,7 @@ When audio is chunked, the app runs candidate generation and judging per chunk, 
 | Strategy | What runs |
 | --- | --- |
 | `single_gemini` | One Gemini transcription candidate, then judge cleanup |
-| `dual_gemini` | Primary Gemini model plus the configured secondary Gemini model, then judge selection/merge |
+| `dual_gemini` | Primary Gemini model plus the paired secondary Gemini model, then judge selection/merge |
 | `gemini_plus_parakeet` | Gemini plus Parakeet ASR as transcript candidates, then judge selection/merge |
 
 ### Models
@@ -123,7 +125,7 @@ alias is still accepted for transcription compatibility.
 1. Upload an audio file.
 2. Choose the primary Gemini model.
 3. Enable `Use Judge Pipeline`.
-4. Choose a candidate strategy.
+4. Choose a candidate strategy. The sidebar labels the options `Single Gemini + Judge`, `Dual Gemini + Judge`, and `Gemini + Parakeet + Judge`.
 5. Optionally add topic, speaker names, and technical terms.
 6. Start transcription.
 

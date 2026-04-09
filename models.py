@@ -248,6 +248,7 @@ class AppState(BaseModel):
     api_key_configured: bool = False
     model_name: str = "gemini-3-flash-preview"
     judge_model_name: str = "gemini-3.1-pro-preview"
+    parakeet_model: str = "nvidia/parakeet-ctc-0.6b"
     candidate_strategy: Literal[
         "single_gemini", "dual_gemini", "gemini_plus_parakeet"
     ] = "dual_gemini"
@@ -256,7 +257,10 @@ class AppState(BaseModel):
     remove_fillers: bool = False
     processing_progress: float = Field(0.0, ge=0, le=1)
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        validate_assignment=True,
+    )
 
     def reset(self):
         """Reset state to initial values"""

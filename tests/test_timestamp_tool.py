@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from agents import timestamp_tool
+from models import TranscriptSegment
 
 
 @pytest.mark.asyncio
@@ -38,3 +39,14 @@ async def test_get_parakeet_model_caches_by_model_name(monkeypatch) -> None:
     assert load_calls == ["model-a", "model-b"]
 
     timestamp_tool._PARAKEET_MODEL_CACHE.clear()
+
+
+def test_analyze_timestamp_quality_recommends_alignment_for_single_segment() -> None:
+    segments = [
+        TranscriptSegment(timestamp="[00:00:00]", speaker="Speaker 1", text="hello")
+    ]
+
+    analysis = timestamp_tool.analyze_timestamp_quality(segments, audio_duration=120.0)
+
+    assert analysis["recommendation"] != "skip"
+    assert "too few segments" not in analysis["reason"].lower()

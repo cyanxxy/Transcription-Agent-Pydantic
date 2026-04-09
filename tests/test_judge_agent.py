@@ -80,7 +80,7 @@ async def test_run_judge_agent_filters_unknown_selected_candidates() -> None:
         deps.cleanup()
 
     assert result.segments == candidates[1].segments
-    assert result.selected_candidate_ids == ["flash"]
+    assert result.selected_candidate_ids == []
     assert "Candidate ID: flash" in fake_agent.prompts[0]
     assert "Candidate ID: pro" in fake_agent.prompts[0]
     assert "Medical interview" in fake_agent.prompts[0]

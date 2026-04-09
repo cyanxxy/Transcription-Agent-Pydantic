@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Optional
 
@@ -9,6 +10,7 @@ from agents.transcription_agent import (
     ensure_speaker_consistency,
     build_transcription_prompt,
     process_audio_file,
+    chunk_audio,
     merge_chunks,
     run_transcription_agent,
     _detect_overlap_boundary,
@@ -272,7 +274,57 @@ async def test_process_audio_file_counts_overlapping_chunks(
         deps.cleanup()
 
     assert metadata.needs_chunking is True
-    assert metadata.chunk_count == 4
+    assert metadata.chunk_count == 3
+
+
+@pytest.mark.asyncio
+async def test_chunk_audio_skips_fully_overlapped_tail_chunk(
+    monkeypatch, tmp_path
+) -> None:
+    class FakeChunk:
+        def __init__(self, start_ms: int, end_ms: int) -> None:
+            self.start_ms = start_ms
+            self.end_ms = end_ms
+
+        def export(self, path, format="wav"):
+            del format
+            Path(path).write_bytes(f"{self.start_ms}-{self.end_ms}".encode())
+
+    class FakeAudio:
+        frame_rate = 16_000
+        channels = 1
+
+        def __len__(self):
+            return 10_000
+
+        def __getitem__(self, item):
+            assert isinstance(item, slice)
+            start_ms = 0 if item.start is None else item.start
+            end_ms = len(self) if item.stop is None else item.stop
+            return FakeChunk(start_ms, end_ms)
+
+    file_path = tmp_path / "audio.wav"
+    file_path.write_bytes(b"fake")
+
+    monkeypatch.setattr(
+        "agents.transcription_agent.AudioSegment.from_file",
+        lambda path: FakeAudio(),
+    )
+
+    deps = TranscriptionDeps(
+        api_key="test-key",
+        chunk_duration_ms=4_000,
+        chunk_overlap_ms=1_000,
+    )
+
+    try:
+        chunks = await chunk_audio(deps, str(file_path))
+    finally:
+        deps.cleanup()
+
+    assert len(chunks) == 3
+    assert [chunk["start_ms"] for chunk in chunks] == [0, 3_000, 6_000]
+    assert [chunk["end_ms"] for chunk in chunks] == [4_000, 7_000, 10_000]
 
 
 def test_detect_overlap_boundary_for_duplicate_segments() -> None:

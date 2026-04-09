@@ -56,17 +56,23 @@ def process_context(user_context: TranscriptContext) -> str:
     # Format expectations based on context
     if user_context.expected_format:
         format_instructions = {
-            "meeting": "Format as meeting minutes with clear speaker turns and action items.",
-            "interview": "Format as Q&A with clear distinction between interviewer and interviewee.",
-            "lecture": "Format as educational content with main points and examples clearly marked.",
-            "podcast": "Format as conversational dialogue with natural flow and speaker personalities.",
-            "legal": "Format with precise language, proper legal terminology, and clear attribution.",
-            "medical": "Use proper medical terminology and maintain HIPAA-appropriate formatting.",
-            "technical": "Include technical details, code snippets, and specifications accurately.",
+            "meeting": "Keep the transcript in meeting form with clear speaker turns and preserve action items only when they are explicitly spoken.",
+            "interview": (
+                "Preserve the interview transcript faithfully with speaker turns "
+                "as spoken, and do not rewrite it into a different structure or relabel speakers "
+                "unless the names are explicitly provided."
+            ),
+            "lecture": "Preserve the lecture transcript faithfully and surface main points only when they are clearly spoken.",
+            "podcast": "Preserve the conversational transcript with natural flow and speaker turns without rewriting into a summary.",
+            "legal": "Preserve exact wording, legal terminology, and attribution without paraphrasing or summarizing.",
+            "medical": "Preserve exact medical terminology and speaker attribution without adding interpretation.",
+            "technical": "Preserve technical details, code snippets, and specifications exactly as spoken.",
         }
         if user_context.expected_format in format_instructions:
             prompt_parts.append(
-                f"FORMAT STYLE: {format_instructions[user_context.expected_format]}"
+                "FORMAT GUIDANCE: "
+                f"{format_instructions[user_context.expected_format]} "
+                "Do not turn the audio into a different document type; keep the output transcript-first and faithful to the spoken content."
             )
 
     # Combine all parts

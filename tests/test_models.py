@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from models import (
     TranscriptSegment,
@@ -482,3 +483,17 @@ def test_app_state_reset_preserves_pipeline_config() -> None:
     assert state.use_judge_pipeline is False
     assert state.auto_format is False
     assert state.remove_fillers is True
+
+
+def test_app_state_rejects_invalid_candidate_strategy_assignment() -> None:
+    state = AppState()
+
+    with pytest.raises(ValidationError):
+        state.candidate_strategy = "triple_gemini"
+
+
+def test_app_state_rejects_invalid_processing_progress_assignment() -> None:
+    state = AppState()
+
+    with pytest.raises(ValidationError):
+        state.processing_progress = 1.5

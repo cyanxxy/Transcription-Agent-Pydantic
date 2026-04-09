@@ -16,7 +16,7 @@ nest_asyncio.apply()
 # Must import after nest_asyncio.apply()
 from workflow import TranscriptionWorkflow  # noqa: E402
 from state_manager import StateManager  # noqa: E402
-from models import ProcessingStatus  # noqa: E402
+from models import AppState, ProcessingStatus  # noqa: E402
 from styles import apply_custom_styles  # noqa: E402
 from utils import run_async  # noqa: E402
 from streamlit_deps import build_app_deps_from_streamlit  # noqa: E402
@@ -66,6 +66,7 @@ def _get_workflow(**kwargs) -> TranscriptionWorkflow:
         model_name = transcription.model_name
         judge_model_name = transcription.judge_model_name
         candidate_strategy = transcription.candidate_strategy
+        parakeet_model = transcription.parakeet_model
         auto_format = transcription.auto_format
         remove_fillers = transcription.remove_fillers
         use_judge_pipeline = transcription.use_judge_pipeline
@@ -76,6 +77,7 @@ def _get_workflow(**kwargs) -> TranscriptionWorkflow:
         model_name = StateManager.get_model_name()
         judge_model_name = StateManager.get_judge_model_name()
         candidate_strategy = StateManager.get_candidate_strategy()
+        parakeet_model = StateManager.get_parakeet_model()
         auto_format = StateManager.get_auto_format()
         remove_fillers = StateManager.get_remove_fillers()
         use_judge_pipeline = StateManager.get_use_judge_pipeline()
@@ -87,6 +89,7 @@ def _get_workflow(**kwargs) -> TranscriptionWorkflow:
         model_name,
         judge_model_name,
         candidate_strategy,
+        parakeet_model,
         auto_format,
         remove_fillers,
         use_judge_pipeline,
@@ -105,6 +108,7 @@ def _get_workflow(**kwargs) -> TranscriptionWorkflow:
         model_name=model_name,
         judge_model_name=judge_model_name,
         candidate_strategy=candidate_strategy,
+        parakeet_model=parakeet_model,
         auto_format=auto_format,
         remove_fillers=remove_fillers,
         use_judge_pipeline=use_judge_pipeline,
@@ -428,7 +432,7 @@ def render_sidebar():
             "Use Judge Pipeline",
             value=StateManager.get_use_judge_pipeline(),
             key="use_judge_pipeline_toggle",
-            help="Generate transcript candidates first, then use a judge agent to pick or merge the final transcript.",
+            help="Generate transcript candidates first, then use a judge agent to pick or merge the final transcript. Turning this off preserves your candidate strategy for later.",
         )
 
         st.session_state.use_judge_pipeline = use_judge_pipeline
@@ -451,20 +455,35 @@ def render_sidebar():
                 "Candidate Strategy",
                 options=list(strategy_options.keys()),
                 index=strategy_values.index(current_strategy),
-                help="Primary model comes from the Model selector above. "
-                "Dual Gemini pairs Flash with Flash-Lite, and pairs Pro with Flash. "
-                "Gemini + Parakeet uses Parakeet as the second candidate.",
+                help="Primary model comes from the Model selector above. Dual Gemini pairs the selected Gemini model with its configured secondary Gemini model. Gemini + Parakeet uses the configured Parakeet model as the second candidate.",
             )
             selected_strategy_value = strategy_options[selected_strategy]
             st.session_state.candidate_strategy = selected_strategy_value
             StateManager.set_candidate_strategy(selected_strategy_value)
             st.caption(
-                "Judge agent runs on Gemini 3.1 Pro by default; Flash-Lite is the low-cost secondary candidate."
+                "Judge agent runs on Gemini 3.1 Pro by default. Dual Gemini uses a paired Gemini candidate; Gemini + Parakeet swaps in the configured Parakeet model."
             )
         else:
-            st.session_state.candidate_strategy = "single_gemini"
-            StateManager.set_candidate_strategy("single_gemini")
-            st.caption("Direct single-model transcription")
+            preserved_strategy = StateManager.get_candidate_strategy()
+            st.session_state.candidate_strategy = preserved_strategy
+            st.caption(
+                f"Direct single-model transcription. Saved candidate strategy: {_format_strategy_label(preserved_strategy)}."
+            )
+
+        with st.expander("Advanced candidate settings"):
+            current_parakeet_model = StateManager.get_parakeet_model()
+            default_parakeet_model = AppState().parakeet_model
+            parakeet_model_input = st.text_input(
+                "Parakeet model",
+                value=current_parakeet_model,
+                key="parakeet_model",
+                help="Used for Parakeet candidate generation and post-judge timestamp alignment.",
+            )
+            parakeet_model = parakeet_model_input.strip() or default_parakeet_model
+            if parakeet_model != parakeet_model_input:
+                st.session_state.parakeet_model = parakeet_model
+            if parakeet_model != current_parakeet_model:
+                StateManager.set_parakeet_model(parakeet_model)
 
         # Context Section
         st.markdown("---")

@@ -116,7 +116,11 @@ async def validate_audio_file(
         return {"valid": False, "error": str(e)}
 
 
-async def process_audio_file(deps: TranscriptionDeps, file_path: str) -> AudioMetadata:
+async def process_audio_file(
+    deps: TranscriptionDeps,
+    file_path: str,
+    source_filename: Optional[str] = None,
+) -> AudioMetadata:
     """Process and analyze audio file"""
     try:
         # Load audio in thread to avoid blocking
@@ -124,8 +128,8 @@ async def process_audio_file(deps: TranscriptionDeps, file_path: str) -> AudioMe
 
         # Get file info
         file_stat = os.stat(file_path)
-        filename = Path(file_path).name
-        ext = Path(file_path).suffix.lower().lstrip(".")
+        filename = source_filename or Path(file_path).name
+        ext = Path(filename).suffix.lower().lstrip(".") or Path(file_path).suffix.lower().lstrip(".")
 
         # Determine if chunking is needed
         duration_ms = len(audio)
@@ -134,7 +138,8 @@ async def process_audio_file(deps: TranscriptionDeps, file_path: str) -> AudioMe
         chunk_count = None
         if needs_chunking:
             step_size = deps.chunk_duration_ms - deps.chunk_overlap_ms
-            chunk_count = (duration_ms + step_size - 1) // step_size
+            remaining_ms = max(0, duration_ms - deps.chunk_duration_ms)
+            chunk_count = 1 + ((remaining_ms + step_size - 1) // step_size)
 
         return AudioMetadata(
             filename=filename,
@@ -163,13 +168,15 @@ async def chunk_audio(deps: TranscriptionDeps, audio_path: str) -> List[Dict[str
         chunk_duration = deps.chunk_duration_ms
         overlap = deps.chunk_overlap_ms
 
-        # Fix: Use proper step size without double-applying overlap
         step_size = chunk_duration - overlap
 
-        for i in range(0, len(audio), step_size):
-            # Calculate chunk boundaries - overlap is already handled by step_size
-            start_ms = i
-            end_ms = min(len(audio), i + chunk_duration)
+        start_ms = 0
+        while start_ms < len(audio):
+            end_ms = min(len(audio), start_ms + chunk_duration)
+
+            # Do not emit a fully overlapped tail chunk that adds no new audio.
+            if chunks and end_ms <= chunks[-1]["end_ms"]:
+                break
 
             chunk = audio[start_ms:end_ms]
 
@@ -187,6 +194,10 @@ async def chunk_audio(deps: TranscriptionDeps, audio_path: str) -> List[Dict[str
                     "duration_ms": end_ms - start_ms,
                 }
             )
+
+            if end_ms >= len(audio):
+                break
+            start_ms += step_size
 
         logger.info(f"Created {len(chunks)} chunks from audio file")
         return chunks

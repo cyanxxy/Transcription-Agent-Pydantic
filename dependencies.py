@@ -28,11 +28,10 @@ GEMINI_MODEL_LABELS = {
 GEMINI_MODEL_THINKING_LEVELS = {
     "gemini-3-flash-preview": {"minimal", "low", "medium", "high"},
     "gemini-3.1-flash-lite-preview": {"minimal", "low", "medium", "high"},
-    "gemini-3.1-pro-preview": {"low", "high"},
+    "gemini-3.1-pro-preview": {"low", "medium", "high"},
 }
 LEGACY_PRO_THINKING_LEVELS = {
-    "minimal": "high",
-    "medium": "high",
+    "minimal": "low",
 }
 SUPPORTED_CANDIDATE_STRATEGIES = {
     "single_gemini",

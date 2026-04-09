@@ -19,6 +19,21 @@ logger = logging.getLogger(__name__)
 # Lazy-loaded Parakeet models (cached by model name)
 _PARAKEET_MODEL_CACHE: Dict[str, Any] = {}
 _MODEL_LOCK = asyncio.Lock()
+_NON_SPEECH_ALIGNMENT_MARKERS = {
+    "applause",
+    "breath",
+    "crosstalk",
+    "inaudible",
+    "laughter",
+    "music",
+    "noise",
+    "overlap",
+    "pause",
+    "silence",
+    "static",
+    "unintelligible",
+    "unknown",
+}
 
 
 async def _get_parakeet_model(model_name: str = "nvidia/parakeet-ctc-0.6b"):
@@ -160,14 +175,18 @@ def analyze_timestamp_quality(
 
     issues = []
     timestamps_seconds = [_parse_timestamp(segment.timestamp) for segment in segments]
+    score = 100
 
-    if len(timestamps_seconds) < 2:
-        return {
-            "alignment_score": 50,
-            "issues": ["Too few segments for analysis"],
-            "recommendation": "skip",
-            "reason": "Not enough segments to analyze patterns",
-        }
+    if len(segments) == 1:
+        single_timestamp = timestamps_seconds[0]
+        if audio_duration >= 30:
+            issues.append("Single-segment transcript may need forced alignment")
+            score -= 25
+            if single_timestamp <= 2:
+                issues.append(
+                    "Single segment starts at the beginning of a long recording"
+                )
+                score -= 25
 
     non_monotonic = 0
     for index in range(1, len(timestamps_seconds)):
@@ -194,7 +213,6 @@ def analyze_timestamp_quality(
     elif coverage > 110:
         issues.append("Timestamp drift: timestamps exceed audio duration")
 
-    score = 100
     score -= non_monotonic * 15
     score -= len([issue for issue in issues if "Irregular" in issue]) * 10
     score -= len([issue for issue in issues if "coverage" in issue.lower()]) * 15
@@ -285,10 +303,15 @@ def _run_alignment_fallback(
 
 
 def _clean_text_for_alignment(text: str) -> str:
-    """Clean text for forced alignment (remove special markers)"""
-    # Remove non-speech markers like [MUSIC], [SILENCE], etc.
-    cleaned = re.sub(r"\[[A-Z]+\]", "", text)
-    # Remove multiple spaces
+    """Clean text for forced alignment by removing common non-speech markers."""
+
+    def _strip_marker(match: re.Match[str]) -> str:
+        marker = re.sub(r"[\s_-]+", "", match.group(1).strip().lower())
+        if marker in _NON_SPEECH_ALIGNMENT_MARKERS:
+            return " "
+        return match.group(0)
+
+    cleaned = re.sub(r"\[([^\[\]]+)\]", _strip_marker, text)
     cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned.strip()
 

@@ -6,6 +6,7 @@ Using Pydantic models for validation
 import streamlit as st
 from typing import Optional, Any, Dict
 import logging
+from pydantic import ValidationError
 
 from models import AppState, ProcessingStatus, TranscriptResult, ErrorDetail
 
@@ -27,19 +28,30 @@ class StateManager:
     def update_state(**kwargs) -> None:
         """Update state with validation"""
         state = StateManager.get_state()
+        updates = {}
 
         for key, value in kwargs.items():
             if hasattr(state, key):
-                try:
-                    setattr(state, key, value)
-                    logger.debug(f"Updated state: {key} = {value}")
-                except Exception as e:
-                    logger.error(f"Failed to update state {key}: {e}")
+                updates[key] = value
             else:
                 logger.warning(f"Unknown state key: {key}")
 
+        if not updates:
+            return
+
+        try:
+            validated_state = AppState.model_validate(
+                {**state.model_dump(), **updates}
+            )
+        except ValidationError as exc:
+            logger.error(f"Failed to update application state: {exc}")
+            raise ValueError(f"Invalid application state update: {exc}") from exc
+
+        for key, value in updates.items():
+            logger.debug(f"Updated state: {key} = {value}")
+
         # Save back to session state
-        st.session_state.app_state = state
+        st.session_state.app_state = validated_state
 
     @staticmethod
     def reset_state() -> None:
@@ -162,6 +174,18 @@ class StateManager:
     def set_judge_model_name(model_name: str) -> None:
         """Set judge model name"""
         StateManager.update_state(judge_model_name=model_name)
+
+    @staticmethod
+    def get_parakeet_model() -> str:
+        """Get configured Parakeet model name"""
+        state = StateManager.get_state()
+        return state.parakeet_model
+
+    @staticmethod
+    def set_parakeet_model(parakeet_model: str) -> None:
+        """Set Parakeet model name"""
+        normalized_model = parakeet_model.strip() or AppState().parakeet_model
+        StateManager.update_state(parakeet_model=normalized_model)
 
     @staticmethod
     def get_candidate_strategy() -> str:

@@ -49,6 +49,7 @@ from agents.timestamp_tool import (
     fix_timestamps_with_parakeet,
     transcribe_with_parakeet,
 )
+from agents.editing_tools import auto_format_transcript, remove_filler_words_helper
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ class JudgedUnitResult:
     candidates: List[TranscriptCandidate]
     selected_candidate_ids: List[str]
     judge_notes: List[str]
+    contains_gap_marker: bool = False
 
 
 class TranscriptionWorkflow:
@@ -132,6 +134,7 @@ class TranscriptionWorkflow:
             metadata = await process_audio_file(
                 self.active_transcription_deps, temp_path
             )
+            metadata = metadata.model_copy(update={"filename": filename})
 
             # Step 2.5: Process user context if provided
             context_prompt = ""
@@ -165,6 +168,7 @@ class TranscriptionWorkflow:
             judge_used = False
             judge_model_used: Optional[str] = None
             judge_selected_candidate_ids: List[str] = []
+            result_edited = False
 
             if use_judge_pipeline:
                 # Use the multi-agent judge pipeline
@@ -175,6 +179,7 @@ class TranscriptionWorkflow:
                     candidates,
                     judge_selected_candidate_ids,
                     judge_notes,
+                    result_edited,
                 ) = await self._transcribe_with_judge_pipeline(
                     temp_path,
                     metadata,
@@ -193,6 +198,12 @@ class TranscriptionWorkflow:
                     custom_prompt,
                     speaker_names,
                 )
+                if progress_callback and (
+                    self.active_transcription_deps.auto_format
+                    or self.active_transcription_deps.remove_fillers
+                ):
+                    progress_callback("Formatting transcript...", 0.7)
+                segments, result_edited = self._apply_output_cleanup(segments)
 
                 # Calculate quality metrics
                 if progress_callback:
@@ -210,7 +221,7 @@ class TranscriptionWorkflow:
                 quality=quality,
                 processing_time=processing_time,
                 model_used=self.deps.transcription.model_name,
-                edited=False,
+                edited=result_edited,
                 timestamps_corrected=timestamps_corrected,
                 candidate_strategy=(
                     self.deps.transcription.candidate_strategy
@@ -258,6 +269,7 @@ class TranscriptionWorkflow:
         List[TranscriptCandidate],
         List[str],
         List[str],
+        bool,
     ]:
         """Run the candidate fan-out and judge fan-in pipeline."""
         if progress_callback:
@@ -310,7 +322,22 @@ class TranscriptionWorkflow:
                     else metadata.duration
                 ),
             )
-            judged_chunks.append(unit_result.final_segments)
+            if unit_result.contains_gap_marker:
+                if not metadata.needs_chunking:
+                    notes = unit_result.judge_notes or [
+                        "No candidate transcription produced segments for the full audio file."
+                    ]
+                    raise RuntimeError(" ".join(notes))
+                gap_segment = self._build_gap_marker_segment(
+                    unit_chunk_info, chunk_label
+                )
+                judged_chunks.append([gap_segment])
+                judge_notes.append(
+                    f"{chunk_label}: no candidate produced transcript segments; "
+                    f"inserted a gap marker at {gap_segment.timestamp}."
+                )
+            else:
+                judged_chunks.append(unit_result.final_segments)
             selected_candidate_ids.extend(unit_result.selected_candidate_ids)
             if metadata.needs_chunking:
                 judge_notes.extend(
@@ -336,6 +363,7 @@ class TranscriptionWorkflow:
             if (
                 unit_result.final_segments
                 and self.active_transcription_deps.preserve_context
+                and not unit_result.contains_gap_marker
             ):
                 previous_context = self._build_followup_context(
                     unit_result.final_segments
@@ -361,6 +389,7 @@ class TranscriptionWorkflow:
             await self._review_timestamps(audio_path, metadata, final_segments)
         )
         judge_notes.extend(timestamp_notes)
+        final_segments, cleanup_applied = self._apply_output_cleanup(final_segments)
 
         if final_segments:
             quality = await self._calculate_quality(final_segments, metadata.duration)
@@ -394,6 +423,7 @@ class TranscriptionWorkflow:
             candidates,
             list(dict.fromkeys(selected_candidate_ids)),
             judge_notes,
+            cleanup_applied,
         )
 
     async def _run_unit_with_judge(
@@ -428,6 +458,7 @@ class TranscriptionWorkflow:
                 candidates=candidates,
                 selected_candidate_ids=[],
                 judge_notes=notes,
+                contains_gap_marker=True,
             )
 
         judge_decision = await run_judge_agent(
@@ -613,6 +644,10 @@ class TranscriptionWorkflow:
                 audio_path,
                 segments,
             )
+            if self._segments_match(segments, corrected):
+                notes.append("Parakeet alignment ran but did not change timestamps.")
+                return segments, False, notes
+
             notes.append("Applied Parakeet alignment after judging.")
             return corrected, True, notes
         except ImportError as exc:
@@ -623,6 +658,77 @@ class TranscriptionWorkflow:
             notes.append(f"Parakeet alignment failed: {exc}")
 
         return segments, False, notes
+
+    def _build_gap_marker_segment(
+        self,
+        chunk_info: Optional[Dict[str, Any]],
+        chunk_label: str,
+    ) -> TranscriptSegment:
+        """Create an explicit placeholder for a missing transcript chunk."""
+        start_ms = int(chunk_info.get("start_ms", 0)) if chunk_info else 0
+        timestamp = (
+            adjust_timestamp("[00:00:00]", start_ms / 1000.0)
+            if start_ms > 0
+            else "[00:00:00]"
+        )
+        return TranscriptSegment(
+            timestamp=timestamp,
+            speaker="Untranscribed",
+            text=f"[no transcript produced for {chunk_label}]",
+        )
+
+    def _segments_match(
+        self,
+        left: List[TranscriptSegment],
+        right: List[TranscriptSegment],
+    ) -> bool:
+        """Compare transcript segments by value rather than object identity."""
+        if len(left) != len(right):
+            return False
+
+        for left_segment, right_segment in zip(left, right):
+            if (
+                left_segment.timestamp != right_segment.timestamp
+                or left_segment.speaker != right_segment.speaker
+                or left_segment.text != right_segment.text
+                or left_segment.confidence != right_segment.confidence
+            ):
+                return False
+
+        return True
+
+    def _apply_output_cleanup(
+        self, segments: List[TranscriptSegment]
+    ) -> tuple[List[TranscriptSegment], bool]:
+        """Apply transcript-faithful cleanup driven by UI toggles."""
+        if not segments:
+            return segments, False
+
+        cleaned_segments = segments
+        cleanup_applied = False
+
+        if self.active_transcription_deps.auto_format:
+            formatted_segments, _ = auto_format_transcript(
+                self.deps.editing, cleaned_segments
+            )
+            if not self._segments_match(cleaned_segments, formatted_segments):
+                cleaned_segments = formatted_segments
+                cleanup_applied = True
+        elif self.active_transcription_deps.remove_fillers:
+            cleaned_segments = []
+            for segment in segments:
+                cleaned_text = remove_filler_words_helper(
+                    segment.text, self.deps.editing.filler_words
+                )
+                if cleaned_text and cleaned_text != segment.text:
+                    cleanup_applied = True
+                    cleaned_segments.append(
+                        segment.model_copy(update={"text": cleaned_text})
+                    )
+                else:
+                    cleaned_segments.append(segment)
+
+        return cleaned_segments, cleanup_applied
 
     def _build_followup_context(self, segments: List[TranscriptSegment]) -> str:
         """Build short context from the tail of the judged transcript."""
@@ -667,12 +773,6 @@ class TranscriptionWorkflow:
         # Step 3.5: Map speakers to context names if provided
         if speaker_names:
             segments = map_speakers_to_context(segments, speaker_names)
-
-        # Step 4: Auto-format if enabled
-        if self.active_transcription_deps.auto_format:
-            if progress_callback:
-                progress_callback("Formatting transcript...", 0.7)
-            # Auto-formatting handled by editing tools if needed
 
         return segments
 
@@ -796,7 +896,6 @@ class TranscriptionWorkflow:
         """Apply editing operation to transcript"""
 
         from agents.editing_tools import (
-            auto_format_transcript,
             find_and_replace,
             fix_capitalization,
         )
